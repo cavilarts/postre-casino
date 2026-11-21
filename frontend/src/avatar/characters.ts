@@ -216,7 +216,8 @@ export const CHARACTERS: Character[] = [
       { name: "Chestnut", colors: { H: "#7a4a28", h: "#4e2e14" } },
       { name: "Snow", colors: { H: "#f0eadc", h: "#b8ae9a" } },
     ],
-    hatOffset: [3, 0],
+    // 2, not 3: the head is centred at x≈10.5, but a 3px shift pushes the top hat and cap brims past the 16px edge.
+    hatOffset: [2, 0],
     glasses: SQUIRREL_GLASSES,
   },
   {
