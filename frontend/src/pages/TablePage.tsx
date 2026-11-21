@@ -7,7 +7,7 @@ import { SeatSpot } from "../components/Seat";
 import { Sidebar } from "../components/Sidebar";
 import { boardDelay, dealBoard, dealHand, type DealContext, TURN_MS } from "../dealing";
 import type { Action, ClientMessage, ServerMessage, TableView } from "../types";
-import { BTN, CARD_BACK_PATTERN, GHOST_BTN } from "../ui";
+import { BTN, CARD_BACK_PATTERN, GHOST_BTN, PANEL } from "../ui";
 import { copyText } from "../utils/clipboard";
 import { errorMessage } from "../utils/errors";
 import { formatChips } from "../utils/format";
@@ -273,8 +273,8 @@ export function TablePage(props: { code: string; navigate: (to: string) => void 
       </header>
 
       {fatal() ? (
-        <div class={NOTICE}>
-          <p class="my-[1em]">{fatal()}</p>
+        <div class={`${NOTICE} ${PANEL} max-w-md px-6 py-5`} role="alert">
+          <p class="m-0 text-[22px] text-red">{fatal()}</p>
           <button class={BTN} onClick={() => props.navigate("/")}>
             Back to lobby
           </button>
