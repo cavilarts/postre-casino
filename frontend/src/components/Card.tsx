@@ -1,10 +1,10 @@
 import { For } from "solid-js";
 import { faceLayers } from "../pixel/cardface";
+import { CARD_BACK_FRAME, CARD_BACK_PATTERN } from "../ui";
 
 const DEFAULT_SIZE = "h-16 w-[46px] max-sm:h-[50px] max-sm:w-9";
 
-const BACK =
-  "border-[3px] border-wood-dark bg-[conic-gradient(#2f6f73_25%,#e7d9a8_0_50%,#2f6f73_0_75%,#e7d9a8_0)] bg-[length:8px_8px] shadow-pixel-sm after:pointer-events-none after:absolute after:inset-[3px] after:border-2 after:border-[#e7d9a8] after:content-['']";
+const BACK = `${CARD_BACK_PATTERN} shadow-pixel-sm ${CARD_BACK_FRAME}`;
 
 const FACE = "border-0 bg-none shadow-none";
 

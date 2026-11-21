@@ -7,7 +7,7 @@ import { SeatSpot } from "../components/Seat";
 import { Sidebar } from "../components/Sidebar";
 import { boardDelay, dealBoard, dealHand, type DealContext, TURN_MS } from "../dealing";
 import type { Action, ClientMessage, ServerMessage, TableView } from "../types";
-import { BTN, GHOST_BTN } from "../ui";
+import { BTN, CARD_BACK_PATTERN, GHOST_BTN } from "../ui";
 import { copyText } from "../utils/clipboard";
 import { errorMessage } from "../utils/errors";
 import { formatChips } from "../utils/format";
@@ -17,8 +17,7 @@ import { remainingFraction, secondsRemaining } from "../utils/time";
 
 const NOTICE = "mx-auto my-[60px] flex flex-col items-center gap-3.5 text-center text-muted";
 
-const SHOE_FACE =
-  "absolute h-[34px] w-14 border-[3px] border-wood-dark bg-[conic-gradient(#2f6f73_25%,#e7d9a8_0_50%,#2f6f73_0_75%,#e7d9a8_0)] bg-[length:8px_8px] shadow-pixel-xs";
+const SHOE_FACE = `absolute h-[34px] w-14 ${CARD_BACK_PATTERN} shadow-pixel-xs`;
 
 export function TablePage(props: { code: string; navigate: (to: string) => void }) {
   const [view, setView] = createSignal<TableView | null>(null);

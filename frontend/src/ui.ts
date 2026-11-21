@@ -23,3 +23,11 @@ export const GHOST_BTN =
 
 export const ARROW =
   "cursor-pointer border-[3px] border-wood bg-parchment-dark px-2 py-0 text-lg text-ink hover:bg-[#fbf0cf]";
+
+/** Checkered card-back face, shared by cards, the dealer's shoe and dealing flights. */
+export const CARD_BACK_PATTERN =
+  "border-[3px] border-wood-dark bg-[conic-gradient(#2f6f73_25%,#e7d9a8_0_50%,#2f6f73_0_75%,#e7d9a8_0)] bg-[length:8px_8px]";
+
+/** Inner frame drawn on card backs (needs a positioned element). */
+export const CARD_BACK_FRAME =
+  "after:pointer-events-none after:absolute after:inset-[3px] after:border-2 after:border-[#e7d9a8] after:content-['']";

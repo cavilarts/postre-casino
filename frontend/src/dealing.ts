@@ -1,8 +1,14 @@
+import { CARD_BACK_FRAME, CARD_BACK_PATTERN } from "./ui";
+import { isCompact } from "./utils/media";
+
 export const TURN_MS = 30_000;
 
 const FLIGHT_MS = 420;
 const DEAL_STEP_MS = 150;
 const BOARD_STEP_MS = 230;
+/** Horizontal distance between board cards: card width plus gap. */
+const BOARD_PITCH = 72;
+const BOARD_PITCH_COMPACT = 34;
 
 export interface DealContext {
   felt: HTMLElement;
@@ -42,8 +48,8 @@ function fly(ctx: DealContext, target: Element, delay: number, dx = 0, dy = 0) {
   const y1 = to.top + to.height / 2 - base.top + dy;
 
   const el = document.createElement("div");
-  el.className =
-    "absolute left-0 top-0 z-[6] h-16 w-[46px] border-[3px] border-wood-dark bg-[conic-gradient(#2f6f73_25%,#e7d9a8_0_50%,#2f6f73_0_75%,#e7d9a8_0)] bg-[length:8px_8px] shadow-pixel-sm after:pointer-events-none after:absolute after:inset-[3px] after:border-2 after:border-[#e7d9a8] after:content-['']";
+  // Phones use smaller cards, so the flying card shrinks to match.
+  el.className = `absolute left-0 top-0 z-[6] ${isCompact() ? "h-[42px] w-[30px]" : "h-16 w-[46px]"} ${CARD_BACK_PATTERN} shadow-pixel-sm ${CARD_BACK_FRAME}`;
   ctx.layer.appendChild(el);
 
   const animation = el.animate(
@@ -85,7 +91,7 @@ export function dealBoard(ctx: DealContext, from: number, to: number) {
   timing.boardStart = Date.now();
   const count = to - from;
   for (let i = from; i < to; i++) {
-    const offset = (i - from - (count - 1) / 2) * 72;
+    const offset = (i - from - (count - 1) / 2) * (isCompact() ? BOARD_PITCH_COMPACT : BOARD_PITCH);
     fly(ctx, boardEl, (i - from) * BOARD_STEP_MS, offset, 0);
   }
 }
