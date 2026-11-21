@@ -165,7 +165,7 @@ export function TablePage(props: { code: string; navigate: (to: string) => void 
   const act = (action: Action) => send({ type: "act", action });
 
   return (
-    <div class="flex min-h-screen flex-col gap-3 px-5 pt-4 pb-6 lg:h-screen lg:min-h-0 lg:gap-2 lg:overflow-hidden lg:px-4 lg:pt-2.5 lg:pb-3">
+    <div class="flex min-h-[100dvh] flex-col gap-3 px-5 pt-4 pb-6 lg:h-[100dvh] lg:min-h-0 lg:gap-2 lg:overflow-hidden lg:px-4 lg:pt-2.5 lg:pb-3">
       <header class="mx-auto flex w-full max-w-[1280px] items-center gap-4 lg:flex-none">
         <button class={GHOST_BTN} onClick={leave}>
           ← Lobby
