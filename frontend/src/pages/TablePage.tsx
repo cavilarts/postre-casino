@@ -221,7 +221,11 @@ export function TablePage(props: { code: string; navigate: (to: string) => void 
           <main class="flex min-w-0 flex-col gap-3.5 lg:h-full lg:min-h-0 lg:gap-2">
             <div class="relative flex flex-1 flex-col pt-32 max-sm:pt-20 lg:min-h-0">
               <div
-                class="relative z-20 aspect-[16/10.2] min-h-[360px] w-full flex-1 max-sm:aspect-[1/1.1] max-sm:min-h-0 lg:aspect-auto lg:min-h-[240px]"
+                class={[
+                  "relative z-20 aspect-[16/10.2] min-h-[360px] w-full flex-1 max-sm:min-h-0 lg:aspect-auto lg:min-h-[240px]",
+                  // Phones stack seats down the sides, so bigger tables need a taller felt.
+                  view()!.maxSeats > 6 ? "max-sm:aspect-[1/1.5]" : "max-sm:aspect-[1/1.1]",
+                ]}
                 ref={el => (feltEl = el)}
               >
                 <div class="absolute inset-x-0 top-[calc(8%_-_48px)] flex justify-center max-sm:origin-bottom max-sm:scale-75">
@@ -327,7 +331,8 @@ export function TablePage(props: { code: string; navigate: (to: string) => void 
             {toast() ? (
               <div
                 role="status"
-                class="fixed bottom-6 left-1/2 z-40 max-w-[calc(100vw-32px)] -translate-x-1/2 border-4 border-wood-dark bg-[#f5c2b5] px-4 py-2 text-[22px] text-wood-dark shadow-pixel max-sm:top-16 max-sm:bottom-auto max-sm:text-xl">
+                class="fixed bottom-6 left-1/2 z-40 max-w-[calc(100vw-32px)] -translate-x-1/2 border-4 border-wood-dark bg-[#f5c2b5] px-4 py-2 text-[22px] text-wood-dark shadow-pixel max-sm:top-16 max-sm:bottom-auto max-sm:text-xl"
+              >
                 {toast()}
               </div>
             ) : null}
