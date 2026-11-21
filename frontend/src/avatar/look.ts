@@ -70,6 +70,26 @@ export const DEFAULT_LOOK: Look = {
   glasses: false,
 };
 
+/**
+ * Builds a valid Look from untrusted data (e.g. localStorage): keeps only the
+ * known fields, and resets any index that is not a whole number in range.
+ * Legacy keys from the old part-by-part creator are dropped.
+ */
+export function sanitizeLook(raw: unknown): Look {
+  const r = (raw !== null && typeof raw === "object" ? raw : {}) as Record<string, unknown>;
+  const index = (value: unknown, count: number) =>
+    typeof value === "number" && Number.isInteger(value) && value >= 0 && value < count ? value : 0;
+  const character = index(r.character, CHARACTERS.length);
+  return {
+    character,
+    tone: index(r.tone, optionCount(character, "tone")),
+    hair: index(r.hair, optionCount(character, "hair")),
+    accent: index(r.accent, optionCount(character, "accent")),
+    hat: index(r.hat, optionCount(character, "hat")),
+    glasses: r.glasses === true,
+  };
+}
+
 export function randomLook(character?: number): Look {
   const pick = (n: number) => Math.floor(Math.random() * n);
   const chosen = character ?? pick(CHARACTERS.length);
