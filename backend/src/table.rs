@@ -850,13 +850,11 @@ fn random_look() -> Look {
     use rand::Rng;
     let mut rng = rand::rng();
     Look {
-        body: rng.random_range(0..2),
-        skin: rng.random_range(0..4),
-        hair_color: rng.random_range(0..4),
-        hair_style: rng.random_range(0..4),
-        outfit: rng.random_range(0..4),
-        accent: rng.random_range(0..4),
-        hat: rng.random_range(0..4),
+        character: rng.random_range(0..Look::CHARACTER_COUNT),
+        tone: rng.random_range(0..Look::MIN_SWATCHES),
+        hair: rng.random_range(0..Look::MIN_SWATCHES),
+        accent: rng.random_range(0..Look::ACCENT_COUNT),
+        hat: rng.random_range(0..Look::HAT_COUNT),
         glasses: rng.random_bool(0.3),
     }
 }

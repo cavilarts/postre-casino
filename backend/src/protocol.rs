@@ -14,26 +14,36 @@ pub enum Action {
 }
 
 /// Character appearance. Every field is an index into the options shown in the
-/// client's character creator.
+/// client's character creator; all characters share the same options, and
+/// `tone`/`hair` pick from that character's own swatches.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(default, rename_all = "camelCase")]
 pub struct Look {
-    pub body: u8,
-    pub skin: u8,
-    pub hair_color: u8,
-    pub hair_style: u8,
-    pub outfit: u8,
+    /// Man, Woman, Cake face, Squirrel, Cat, Queen, Baby.
+    pub character: u8,
+    pub tone: u8,
+    pub hair: u8,
     pub accent: u8,
     pub hat: u8,
     pub glasses: bool,
 }
 
 impl Look {
+    /// Must match `CHARACTERS` in frontend/src/avatar/characters.ts.
+    pub const CHARACTER_COUNT: u8 = 7;
+    /// Must match `ACCENTS` and `HAT_NAMES` in frontend/src/avatar/look.ts.
+    pub const ACCENT_COUNT: u8 = 4;
+    pub const HAT_COUNT: u8 = 4;
+    /// Every character offers at least this many tone and hair swatches; bots
+    /// pick from this range. Characters may offer more.
+    pub const MIN_SWATCHES: u8 = 4;
+
+    /// `tone` and `hair` are not range-checked: their swatch lists live only in
+    /// the client (and vary per character), and the client falls back to the
+    /// first swatch for an unknown index. Checking them here against a copied
+    /// count would silently reset the whole look when a swatch is added.
     pub fn is_valid(&self) -> bool {
-        self.body < 2
-            && [self.skin, self.hair_color, self.hair_style, self.outfit, self.accent, self.hat]
-                .iter()
-                .all(|&v| v < 4)
+        self.character < Self::CHARACTER_COUNT && self.accent < Self::ACCENT_COUNT && self.hat < Self::HAT_COUNT
     }
 }
 
@@ -144,4 +154,24 @@ pub struct TableView {
     pub log: Vec<String>,
     pub chat: Vec<ChatMessage>,
     pub viewers: usize,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn look_validation_checks_shared_lists_but_not_swatches() {
+        let look = Look { character: 6, accent: 3, hat: 3, tone: 9, hair: 200, glasses: true };
+        assert!(look.is_valid(), "unknown swatch indexes are left to the client");
+        assert!(!Look { character: Look::CHARACTER_COUNT, ..look }.is_valid());
+        assert!(!Look { accent: Look::ACCENT_COUNT, ..look }.is_valid());
+        assert!(!Look { hat: Look::HAT_COUNT, ..look }.is_valid());
+    }
+
+    #[test]
+    fn look_fields_default_when_missing() {
+        let look: Look = serde_json::from_str(r#"{"character":3}"#).unwrap();
+        assert_eq!(look, Look { character: 3, ..Look::default() });
+    }
 }

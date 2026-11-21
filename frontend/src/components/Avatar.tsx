@@ -1,10 +1,10 @@
 import { For } from "solid-js";
 import { composeAvatar, type Look } from "../avatar/look";
 
-export function Avatar(props: { look: Look; size: number }) {
+export function Avatar(props: { look: Look; size: number; class?: string }) {
   return (
     <svg
-      class="avatar"
+      class={`block [image-rendering:pixelated] ${props.class ?? ""}`}
       viewBox="0 0 16 16"
       width={props.size}
       height={props.size}

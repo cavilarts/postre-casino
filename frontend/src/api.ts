@@ -1,4 +1,4 @@
-import { DEFAULT_LOOK, type Look } from "./avatar/look";
+import { DEFAULT_LOOK, type Look, sanitizeLook } from "./avatar/look";
 import type { TableSummary } from "./types";
 
 export interface Identity {
@@ -75,7 +75,7 @@ const LOOK_KEY = "poker.look";
 export function loadLook(): Look {
   try {
     const raw = localStorage.getItem(LOOK_KEY);
-    if (raw) return { ...DEFAULT_LOOK, ...(JSON.parse(raw) as Partial<Look>) };
+    if (raw) return sanitizeLook(JSON.parse(raw));
   } catch {
     // fall through to the default look
   }
