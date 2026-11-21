@@ -30,14 +30,36 @@ export const ACCENTS: Option[] = [
 
 export const HAT_NAMES = ["None", "Top hat", "Cap", "Crown"];
 
-/** Number of choices for each option; every character has 4 tones and 4 hair swatches. */
-export const OPTION_COUNTS = {
-  character: CHARACTERS.length,
-  tone: 4,
-  hair: 4,
-  accent: ACCENTS.length,
-  hat: HAT_NAMES.length,
-} as const;
+export type SteppedOption = "tone" | "hair" | "accent" | "hat";
+
+/**
+ * Number of choices for an option, derived from the data itself. Tone and hair
+ * come from the given character's swatch lists, so characters may offer
+ * different numbers of swatches.
+ */
+export function optionCount(character: number, option: SteppedOption): number {
+  const c = CHARACTERS[character] ?? CHARACTERS[0];
+  switch (option) {
+    case "tone":
+      return c.tones.length;
+    case "hair":
+      return c.hairs.length;
+    case "accent":
+      return ACCENTS.length;
+    case "hat":
+      return HAT_NAMES.length;
+  }
+}
+
+/** Switches character, keeping tone/hair choices that the new character also offers. */
+export function withCharacter(look: Look, character: number): Look {
+  return {
+    ...look,
+    character,
+    tone: look.tone < optionCount(character, "tone") ? look.tone : 0,
+    hair: look.hair < optionCount(character, "hair") ? look.hair : 0,
+  };
+}
 
 export const DEFAULT_LOOK: Look = {
   character: 0,
@@ -50,12 +72,13 @@ export const DEFAULT_LOOK: Look = {
 
 export function randomLook(character?: number): Look {
   const pick = (n: number) => Math.floor(Math.random() * n);
+  const chosen = character ?? pick(CHARACTERS.length);
   return {
-    character: character ?? pick(OPTION_COUNTS.character),
-    tone: pick(OPTION_COUNTS.tone),
-    hair: pick(OPTION_COUNTS.hair),
-    accent: pick(OPTION_COUNTS.accent),
-    hat: pick(OPTION_COUNTS.hat),
+    character: chosen,
+    tone: pick(optionCount(chosen, "tone")),
+    hair: pick(optionCount(chosen, "hair")),
+    accent: pick(optionCount(chosen, "accent")),
+    hat: pick(optionCount(chosen, "hat")),
     glasses: Math.random() < 0.3,
   };
 }

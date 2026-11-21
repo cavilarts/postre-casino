@@ -1,10 +1,19 @@
 import { For, Show } from "solid-js";
 import { CHARACTERS } from "../avatar/characters";
-import { ACCENTS, DEFAULT_LOOK, HAT_NAMES, type Look, OPTION_COUNTS, randomLook } from "../avatar/look";
+import {
+  ACCENTS,
+  DEFAULT_LOOK,
+  HAT_NAMES,
+  type Look,
+  optionCount,
+  randomLook,
+  type SteppedOption,
+  withCharacter,
+} from "../avatar/look";
 import { ARROW, BTN_SMALL, INPUT } from "../ui";
 import { Avatar } from "./Avatar";
 
-type Field = "tone" | "hair" | "accent" | "hat";
+type Field = SteppedOption;
 
 interface Row {
   field: Field;
@@ -43,7 +52,7 @@ export function AvatarCreator(props: AvatarCreatorProps) {
   ];
 
   const step = (field: Field, delta: number) => {
-    const count = OPTION_COUNTS[field];
+    const count = optionCount(props.look.character, field);
     props.onChange({
       ...props.look,
       [field]: (props.look[field] + delta + count) % count,
@@ -68,7 +77,7 @@ export function AvatarCreator(props: AvatarCreatorProps) {
               : null;
     if (next === null) return;
     event.preventDefault();
-    props.onChange({ ...props.look, character: next });
+    props.onChange(withCharacter(props.look, next));
     pickerEl?.querySelectorAll<HTMLButtonElement>("[role=radio]")[next]?.focus();
   };
 
@@ -97,9 +106,9 @@ export function AvatarCreator(props: AvatarCreatorProps) {
                     ? "border-gold bg-[#fff6dc] shadow-pixel-xs"
                     : "border-wood bg-parchment-dark hover:bg-[#fbf0cf]"
                 }`}
-                onClick={() => props.onChange({ ...props.look, character: i() })}
+                onClick={() => props.onChange(withCharacter(props.look, i()))}
               >
-                <Avatar look={{ ...props.look, character: i() }} size={40} class="h-auto w-full" />
+                <Avatar look={withCharacter(props.look, i())} size={40} class="h-auto w-full" />
               </button>
             );
           }}
