@@ -1,6 +1,7 @@
 import { createSignal, createStore, For, onSettled, Show } from "solid-js";
 import { createTable, listTables, loadIdentity, loadLook, saveLook, saveName } from "../api";
 import { AvatarCreator } from "../components/AvatarCreator";
+import { Logo } from "../components/Logo";
 import type { TableSummary } from "../types";
 
 const STAGE_LABELS: Record<string, string> = {
@@ -94,9 +95,9 @@ export function Lobby(props: { navigate: (to: string) => void }) {
     <div class="lobby">
       <header class="brand-bar">
         <div class="brand">
-          <span class="brand-mark">♠</span>
+          <Logo height={45} class="brand-mark" />
           <div>
-            <h1>Felt &amp; Friends</h1>
+            <h1>Postre Poker</h1>
             <p>Texas Hold'em with your crew</p>
           </div>
         </div>

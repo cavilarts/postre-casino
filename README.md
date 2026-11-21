@@ -1,4 +1,4 @@
-# Felt & Friends — online Texas Hold'em
+# Postre Poker — online Texas Hold'em
 
 A multiplayer poker game for playing with friends in the browser.
 
