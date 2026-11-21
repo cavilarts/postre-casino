@@ -2,22 +2,27 @@ import { createMemo, createSignal } from "solid-js";
 import type { Action, ActionsView } from "../types";
 import { formatChips } from "../utils/format";
 import { INPUT } from "../ui";
+import { Card } from "./Card";
 
 interface ActionBarProps {
   actions: ActionsView;
   pot: number;
   currentBet: number;
+  /** The player's hole cards and hand name, repeated in the bar on phones where it covers their seat. */
+  hole: string[];
+  handName: string | null;
   onAct: (action: Action) => void;
 }
 
 const ACTION_BASE =
-  "min-w-[118px] cursor-pointer border-[3px] border-wood-dark px-3.5 py-2 text-2xl text-ink shadow-[0_4px_0_var(--color-wood-dark)] transition-[transform,box-shadow] duration-[50ms] ease-[steps(2)] active:enabled:translate-y-[3px] active:enabled:shadow-[0_1px_0_var(--color-wood-dark)] lg:px-3 lg:py-1.5 lg:text-[22px]";
+  "min-w-[118px] cursor-pointer border-[3px] border-wood-dark px-3.5 py-2 text-2xl text-ink shadow-[0_4px_0_var(--color-wood-dark)] transition-[transform,box-shadow] duration-[50ms] ease-[steps(2)] active:enabled:translate-y-[3px] active:enabled:shadow-[0_1px_0_var(--color-wood-dark)] max-sm:min-w-0 max-sm:flex-1 max-sm:py-1.5 max-sm:text-xl lg:px-3 lg:py-1.5 lg:text-[22px]";
 
 const BTN_FOLD = `${ACTION_BASE} bg-[#e58b78] hover:enabled:bg-[#fbf0cf]`;
 const BTN_CALL = `${ACTION_BASE} bg-green hover:enabled:bg-[#fbf0cf]`;
 const BTN_RAISE = `${ACTION_BASE} bg-gold hover:enabled:bg-[#ffc857]`;
 
-const CHIP = "cursor-pointer border-[3px] border-wood bg-parchment-dark px-2 text-xl text-ink hover:bg-[#fbf0cf]";
+const CHIP =
+  "cursor-pointer border-[3px] border-wood bg-parchment-dark px-2 text-xl text-ink hover:bg-[#fbf0cf] max-sm:min-h-[40px] max-sm:min-w-[52px]";
 
 export function ActionBar(props: ActionBarProps) {
   const minTo = createMemo(() => props.actions.minRaiseTo);
@@ -44,7 +49,14 @@ export function ActionBar(props: ActionBarProps) {
   };
 
   return (
-    <div class="flex flex-wrap items-start gap-2.5 border-4 border-wood bg-parchment p-3 text-ink shadow-pixel lg:gap-2 lg:px-2.5 lg:py-2">
+    // On phones the bar sticks to the bottom of the screen so the player can act without scrolling.
+    <div class="flex flex-wrap items-start gap-2.5 border-4 border-wood bg-parchment p-3 text-ink shadow-pixel max-sm:sticky max-sm:bottom-0 max-sm:z-30 max-sm:gap-2 max-sm:p-2 max-sm:pb-[calc(8px+env(safe-area-inset-bottom))] lg:gap-2 lg:px-2.5 lg:py-2">
+      {props.hole.length > 0 ? (
+        <div class="hidden self-center max-sm:flex max-sm:gap-0.5" title={props.handName ?? undefined}>
+          <Card code={props.hole[0]} class="h-[42px] w-[30px]" />
+          <Card code={props.hole[1]} class="h-[42px] w-[30px]" />
+        </div>
+      ) : null}
       <button class={BTN_FOLD} onClick={() => props.onAct({ type: "fold" })}>
         Fold
       </button>
@@ -60,7 +72,7 @@ export function ActionBar(props: ActionBarProps) {
       )}
 
       {canRaise() ? (
-        <div class="flex min-w-[260px] flex-1 flex-col gap-2">
+        <div class="flex min-w-[260px] flex-1 flex-col gap-2 max-sm:min-w-0 max-sm:basis-full">
           <div class="flex flex-wrap gap-1.5">
             <button class={CHIP} onClick={() => setRaiseTo(minTo())}>
               Min
@@ -77,7 +89,7 @@ export function ActionBar(props: ActionBarProps) {
           </div>
           <div class="flex gap-2">
             <input
-              class={`${INPUT} w-[130px] text-2xl tabular-nums lg:w-[110px]`}
+              class={`${INPUT} w-[130px] text-2xl tabular-nums max-sm:w-[100px] max-sm:text-xl lg:w-[110px]`}
               type="number"
               min={minTo()}
               max={maxTo()}

@@ -314,6 +314,8 @@ export function TablePage(props: { code: string; navigate: (to: string) => void 
                 actions={view()!.actions!}
                 pot={view()!.pot}
                 currentBet={view()!.currentBet}
+                hole={view()!.you !== null ? (view()!.seats[view()!.you!]?.hole ?? []) : []}
+                handName={view()!.yourHand}
                 onAct={act}
               />
             ) : (
