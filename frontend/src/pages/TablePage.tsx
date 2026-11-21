@@ -219,12 +219,12 @@ export function TablePage(props: { code: string; navigate: (to: string) => void 
       ) : (
         <div class="mx-auto grid w-full max-w-[1280px] flex-1 grid-cols-[minmax(0,1fr)_330px] gap-4.5 max-lg:grid-cols-1 lg:min-h-0 lg:flex-auto lg:grid-rows-[minmax(0,1fr)]">
           <main class="flex min-w-0 flex-col gap-3.5 lg:h-full lg:min-h-0 lg:gap-2">
-            <div class="relative flex flex-1 flex-col pt-32 lg:min-h-0">
+            <div class="relative flex flex-1 flex-col pt-32 max-sm:pt-20 lg:min-h-0">
               <div
                 class="relative z-20 aspect-[16/10.2] min-h-[360px] w-full flex-1 max-sm:aspect-[1/1.1] max-sm:min-h-0 lg:aspect-auto lg:min-h-[240px]"
                 ref={el => (feltEl = el)}
               >
-                <div class="absolute inset-x-0 top-[calc(8%_-_48px)] flex justify-center">
+                <div class="absolute inset-x-0 top-[calc(8%_-_48px)] flex justify-center max-sm:origin-bottom max-sm:scale-75">
                   <Croupier line={croupierLine()} dealing={dealing()} />
                 </div>
 

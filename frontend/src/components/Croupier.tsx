@@ -8,7 +8,7 @@ const SCALE = 4;
 export function Croupier(props: { line: string; dealing: boolean }) {
   return (
     <div class="relative flex justify-center">
-      <div class="absolute bottom-full left-1/2 mb-2 w-max max-w-[320px] -translate-x-1/2 border-[3px] border-wood-dark bg-parchment px-3 py-1.5 text-xl text-ink shadow-pixel after:absolute after:-bottom-2 after:left-1/2 after:h-0 after:w-0 after:-translate-x-1/2 after:border-x-[8px] after:border-x-transparent after:border-t-[8px] after:border-t-wood-dark after:content-['']">
+      <div class="absolute bottom-full left-1/2 mb-2 w-max max-w-[320px] -translate-x-1/2 border-[3px] border-wood-dark bg-parchment px-3 py-1.5 text-xl text-ink max-sm:max-w-[250px] max-sm:text-base shadow-pixel after:absolute after:-bottom-2 after:left-1/2 after:h-0 after:w-0 after:-translate-x-1/2 after:border-x-[8px] after:border-x-transparent after:border-t-[8px] after:border-t-wood-dark after:content-['']">
         {props.line}
       </div>
       <div class="flex items-end [filter:drop-shadow(4px_4px_0_var(--color-wood-dark))]">
