@@ -5,6 +5,8 @@
     "dev": "vite",
     "build": "tsc --noEmit && vite build",
     "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest",
     "preview": "vite preview"
   },
   "type": "module",
@@ -18,7 +20,8 @@
     "@types/node": "^26.6.6",
     "tailwindcss": "^4.3.5",
     "typescript": "^7.0.2",
-    "vite": "^8.3.8"
+    "vite": "^8.3.8",
+    "vitest": "5.1.0"
   },
   "private": true,
   "description": "Solid 2.0 frontend for the Rust poker server"
