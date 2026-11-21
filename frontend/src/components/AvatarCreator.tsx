@@ -50,9 +50,37 @@ export function AvatarCreator(props: AvatarCreatorProps) {
     });
   };
 
+  let pickerEl: HTMLDivElement | undefined;
+
+  /** Radio group keys: arrows move (and select) with wrap-around, Home/End jump to the ends. */
+  const onPickerKey = (event: KeyboardEvent) => {
+    const count = CHARACTERS.length;
+    const current = props.look.character;
+    const next =
+      event.key === "ArrowRight" || event.key === "ArrowDown"
+        ? (current + 1) % count
+        : event.key === "ArrowLeft" || event.key === "ArrowUp"
+          ? (current - 1 + count) % count
+          : event.key === "Home"
+            ? 0
+            : event.key === "End"
+              ? count - 1
+              : null;
+    if (next === null) return;
+    event.preventDefault();
+    props.onChange({ ...props.look, character: next });
+    pickerEl?.querySelectorAll<HTMLButtonElement>("[role=radio]")[next]?.focus();
+  };
+
   return (
     <div class="flex flex-col gap-4">
-      <div role="radiogroup" aria-label="Character" class="grid grid-cols-7 gap-1.5">
+      <div
+        role="radiogroup"
+        aria-label="Character"
+        class="grid grid-cols-7 gap-1.5"
+        ref={el => (pickerEl = el)}
+        onKeyDown={onPickerKey}
+      >
         <For each={CHARACTERS}>
           {(c, i) => {
             const selected = () => props.look.character === i();
@@ -61,6 +89,7 @@ export function AvatarCreator(props: AvatarCreatorProps) {
                 type="button"
                 role="radio"
                 aria-checked={selected() ? "true" : "false"}
+                tabindex={selected() ? 0 : -1}
                 aria-label={c.name}
                 title={c.name}
                 class={`cursor-pointer border-[3px] p-1 ${
@@ -97,11 +126,16 @@ export function AvatarCreator(props: AvatarCreatorProps) {
             maxlength={20}
             placeholder="Enter a name"
             aria-invalid={props.nameError ? "true" : undefined}
+            aria-describedby={props.nameError ? "name-error" : undefined}
             onInput={e => props.onNameChange(e.currentTarget.value)}
           />
         </label>
         <Show when={props.nameError}>
-          {message => <p class="m-0 pl-[100px] text-xl text-red max-sm:pl-0">{message()}</p>}
+          {message => (
+            <p id="name-error" class="m-0 pl-[100px] text-xl text-red max-sm:pl-0">
+              {message()}
+            </p>
+          )}
         </Show>
 
         <For each={rows()}>
