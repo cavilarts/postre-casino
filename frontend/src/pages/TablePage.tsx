@@ -325,7 +325,9 @@ export function TablePage(props: { code: string; navigate: (to: string) => void 
             )}
 
             {toast() ? (
-              <div class="fixed bottom-6 left-1/2 z-10 -translate-x-1/2 border-4 border-wood-dark bg-[#f5c2b5] px-4 py-2 text-[22px] text-wood-dark shadow-pixel">
+              <div
+                role="status"
+                class="fixed bottom-6 left-1/2 z-40 max-w-[calc(100vw-32px)] -translate-x-1/2 border-4 border-wood-dark bg-[#f5c2b5] px-4 py-2 text-[22px] text-wood-dark shadow-pixel max-sm:top-16 max-sm:bottom-auto max-sm:text-xl">
                 {toast()}
               </div>
             ) : null}
