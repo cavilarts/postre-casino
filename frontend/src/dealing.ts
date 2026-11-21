@@ -1,8 +1,14 @@
+import { CARD_BACK_FRAME, CARD_BACK_PATTERN } from "./ui";
+import { isCompact } from "./utils/media";
+
 export const TURN_MS = 30_000;
 
 const FLIGHT_MS = 420;
 const DEAL_STEP_MS = 150;
 const BOARD_STEP_MS = 230;
+/** Horizontal distance between board cards: card width plus gap. */
+const BOARD_PITCH = 72;
+const BOARD_PITCH_COMPACT = 34;
 
 export interface DealContext {
   felt: HTMLElement;
@@ -32,6 +38,15 @@ export function boardDelay(index: number): number {
   return Math.max(0, timing.boardStart + slot * BOARD_STEP_MS + FLIGHT_MS - Date.now());
 }
 
+/**
+ * Flights use the Web Animations API, which the stylesheet's reduced-motion
+ * rule can't reach, so check the preference here (live, so a change applies
+ * from the next deal).
+ */
+function reducedMotion(): boolean {
+  return window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+}
+
 function fly(ctx: DealContext, target: Element, delay: number, dx = 0, dy = 0) {
   const base = ctx.layer.getBoundingClientRect();
   const from = ctx.shoe.getBoundingClientRect();
@@ -42,7 +57,8 @@ function fly(ctx: DealContext, target: Element, delay: number, dx = 0, dy = 0) {
   const y1 = to.top + to.height / 2 - base.top + dy;
 
   const el = document.createElement("div");
-  el.className = "card back flying";
+  // Phones use smaller cards, so the flying card shrinks to match.
+  el.className = `absolute left-0 top-0 z-[6] ${isCompact() ? "h-[42px] w-[30px]" : "h-16 w-[46px]"} ${CARD_BACK_PATTERN} shadow-pixel-sm ${CARD_BACK_FRAME}`;
   ctx.layer.appendChild(el);
 
   const animation = el.animate(
@@ -63,8 +79,13 @@ export function dealHand(ctx: DealContext, inHand: number[], button: number | nu
     inHand.includes(s),
   );
   timing.holeStart = Date.now();
-  timing.holeOrder = order;
   timing.boardFrom = 0;
+  if (reducedMotion()) {
+    // No flights: an empty order makes holeDelay() 0 so cards show at once.
+    timing.holeOrder = [];
+    return;
+  }
+  timing.holeOrder = order;
 
   for (let round = 0; round < 2; round++) {
     order.forEach((seat, k) => {
@@ -78,13 +99,18 @@ export function dealHand(ctx: DealContext, inHand: number[], button: number | nu
 
 /** Flies newly revealed community cards from the shoe to the board. */
 export function dealBoard(ctx: DealContext, from: number, to: number) {
-  const boardEl = ctx.felt.querySelector(".board");
+  const boardEl = ctx.felt.querySelector("[data-board]");
   if (!boardEl) return;
-  timing.boardFrom = from;
   timing.boardStart = Date.now();
+  if (reducedMotion()) {
+    // No flights: boardDelay() is 0 for every card before boardFrom.
+    timing.boardFrom = to;
+    return;
+  }
+  timing.boardFrom = from;
   const count = to - from;
   for (let i = from; i < to; i++) {
-    const offset = (i - from - (count - 1) / 2) * 72;
+    const offset = (i - from - (count - 1) / 2) * (isCompact() ? BOARD_PITCH_COMPACT : BOARD_PITCH);
     fly(ctx, boardEl, (i - from) * BOARD_STEP_MS, offset, 0);
   }
 }
