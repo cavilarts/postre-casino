@@ -77,7 +77,7 @@ export function Lobby(props: { navigate: (to: string) => void }) {
         maxSeats: Number(form.maxSeats),
         private: form.private,
       });
-      props.navigate(`/table/${table.code}`);
+      props.navigate(tablePath(table.code));
     } catch (error) {
       setFormError(errorMessage(error, "Something went wrong"));
       setBusy(false);
