@@ -1,5 +1,6 @@
 import { createEffect, createSignal, For } from "solid-js";
 import type { ChatMessage } from "../types";
+import { BTN_SMALL, INPUT, PANEL } from "../ui";
 
 interface SidebarProps {
   log: string[];
@@ -7,6 +8,9 @@ interface SidebarProps {
   viewers: number;
   onChat: (text: string) => void;
 }
+
+const HEADING = "mb-3 flex flex-wrap items-baseline justify-between gap-2 text-[10px] text-ink [text-shadow:none]";
+const SCROLL = "flex h-[200px] flex-col gap-1 overflow-y-auto pr-1 text-xl lg:h-auto lg:min-h-0 lg:flex-auto";
 
 export function Sidebar(props: SidebarProps) {
   const [draft, setDraft] = createSignal("");
@@ -35,36 +39,36 @@ export function Sidebar(props: SidebarProps) {
   };
 
   return (
-    <aside class="sidebar">
-      <section class="panel">
-        <h3 class="panel-title">Hand history</h3>
-        <div class="log" ref={el => (logEl = el)}>
-          <For each={props.log}>{line => <div class="log-line">{line}</div>}</For>
+    <aside class="flex min-h-0 flex-col gap-4 lg:h-full lg:gap-2.5">
+      <section class={`${PANEL} flex min-h-0 flex-col lg:flex-1 lg:basis-0 lg:px-3.5 lg:py-2.5`}>
+        <h3 class={HEADING}>Hand history</h3>
+        <div class={SCROLL} ref={el => (logEl = el)}>
+          <For each={props.log}>{line => <div class="text-[#5a4426]">{line}</div>}</For>
         </div>
       </section>
 
-      <section class="panel chat-panel">
-        <h3 class="panel-title">
-          Table chat <span class="viewers">{props.viewers} watching</span>
+      <section class={`${PANEL} flex min-h-0 flex-col lg:flex-1 lg:basis-0 lg:px-3.5 lg:py-2.5`}>
+        <h3 class={HEADING}>
+          Table chat <span class="text-xl text-[#7a6442]">{props.viewers} watching</span>
         </h3>
-        <div class="chat" ref={el => (chatEl = el)}>
+        <div class={SCROLL} ref={el => (chatEl = el)}>
           <For each={props.chat}>
             {msg => (
-              <div class="chat-line">
-                <strong>{msg.name}</strong> {msg.text}
+              <div class="text-ink">
+                <strong class="font-normal text-red">{msg.name}</strong> {msg.text}
               </div>
             )}
           </For>
         </div>
-        <form class="chat-form" onSubmit={submit}>
+        <form class="mt-2.5 flex gap-2" onSubmit={submit}>
           <input
-            class="chat-input"
+            class={`${INPUT} flex-1 text-[22px]`}
             placeholder="Say something…"
             maxlength={300}
             value={draft()}
             onInput={e => setDraft(e.currentTarget.value)}
           />
-          <button class="btn btn-small" type="submit">
+          <button class={BTN_SMALL} type="submit">
             Send
           </button>
         </form>

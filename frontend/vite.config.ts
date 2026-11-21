@@ -1,10 +1,11 @@
 import { defineConfig } from "vite";
+import tailwindcss from "@tailwindcss/vite";
 import solid from "@solidjs/vite-plugin";
 
 const backend = process.env.BACKEND_URL ?? "http://localhost:3000";
 
 export default defineConfig({
-  plugins: [solid()],
+  plugins: [tailwindcss(), solid()],
   server: {
     host: true,
     port: 5173,

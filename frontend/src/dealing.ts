@@ -42,7 +42,8 @@ function fly(ctx: DealContext, target: Element, delay: number, dx = 0, dy = 0) {
   const y1 = to.top + to.height / 2 - base.top + dy;
 
   const el = document.createElement("div");
-  el.className = "card back flying";
+  el.className =
+    "absolute left-0 top-0 z-[6] h-16 w-[46px] border-[3px] border-wood-dark bg-[conic-gradient(#2f6f73_25%,#e7d9a8_0_50%,#2f6f73_0_75%,#e7d9a8_0)] bg-[length:8px_8px] shadow-pixel-sm after:pointer-events-none after:absolute after:inset-[3px] after:border-2 after:border-[#e7d9a8] after:content-['']";
   ctx.layer.appendChild(el);
 
   const animation = el.animate(
@@ -78,7 +79,7 @@ export function dealHand(ctx: DealContext, inHand: number[], button: number | nu
 
 /** Flies newly revealed community cards from the shoe to the board. */
 export function dealBoard(ctx: DealContext, from: number, to: number) {
-  const boardEl = ctx.felt.querySelector(".board");
+  const boardEl = ctx.felt.querySelector("[data-board]");
   if (!boardEl) return;
   timing.boardFrom = from;
   timing.boardStart = Date.now();

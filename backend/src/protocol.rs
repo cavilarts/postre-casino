@@ -14,26 +14,28 @@ pub enum Action {
 }
 
 /// Character appearance. Every field is an index into the options shown in the
-/// client's character creator.
+/// client's character creator; all characters share the same options, and
+/// `tone`/`hair` pick from that character's own swatches.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(default, rename_all = "camelCase")]
 pub struct Look {
-    pub body: u8,
-    pub skin: u8,
-    pub hair_color: u8,
-    pub hair_style: u8,
-    pub outfit: u8,
+    /// Man, Woman, Cake face, Squirrel, Cat, Queen, Baby.
+    pub character: u8,
+    pub tone: u8,
+    pub hair: u8,
     pub accent: u8,
     pub hat: u8,
     pub glasses: bool,
 }
 
 impl Look {
+    pub const CHARACTER_COUNT: u8 = 7;
+    /// Tones, hair swatches, accent colours and headwear each have this many choices.
+    pub const OPTION_COUNT: u8 = 4;
+
     pub fn is_valid(&self) -> bool {
-        self.body < 2
-            && [self.skin, self.hair_color, self.hair_style, self.outfit, self.accent, self.hat]
-                .iter()
-                .all(|&v| v < 4)
+        self.character < Self::CHARACTER_COUNT
+            && [self.tone, self.hair, self.accent, self.hat].iter().all(|&v| v < Self::OPTION_COUNT)
     }
 }
 
