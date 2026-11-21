@@ -246,12 +246,12 @@ export function TablePage(props: { code: string; navigate: (to: string) => void 
                     <span class={`${SHOE_FACE} left-1 top-1.5`} />
                   </div>
 
-                  <div class="pointer-events-none absolute left-1/2 top-1/2 flex w-[70%] -translate-x-1/2 -translate-y-1/2 flex-col items-center gap-2.5 text-center max-sm:top-[44%]">
+                  <div class="pointer-events-none absolute left-1/2 top-1/2 flex w-[70%] -translate-x-1/2 -translate-y-1/2 flex-col items-center gap-2.5 text-center max-sm:top-[44%] max-sm:w-[50%] max-sm:gap-1.5">
                     <div class="font-display text-[9px] tracking-[0.04em] text-cream [text-shadow:2px_2px_0_var(--color-wood-dark)]">
                       {TABLE_STAGE_LABELS[view()!.stage]}
                     </div>
                     <div
-                      class="flex min-h-[100px] flex-wrap items-center justify-center gap-2.5 max-sm:min-h-[74px] max-sm:gap-1.5"
+                      class="flex min-h-[100px] flex-wrap items-center justify-center gap-2.5 max-sm:min-h-[42px] max-sm:gap-1"
                       data-board
                     >
                       <For each={view()!.board}>
@@ -259,7 +259,7 @@ export function TablePage(props: { code: string; navigate: (to: string) => void 
                           <Card
                             code={code}
                             delay={boardDelay(i())}
-                            class="h-24 w-[68px] max-sm:h-[54px] max-sm:w-[38px]"
+                            class="h-24 w-[68px] max-sm:h-[42px] max-sm:w-[30px]"
                             board
                           />
                         )}

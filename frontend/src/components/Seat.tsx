@@ -17,7 +17,7 @@ export function seatPosition(seat: number, count: number, you: number | null) {
     you !== null
       ? centeredSeatAngle(rel, count)
       : (2 * Math.PI * slot) / slots;
-  const radiusX = isCompact() ? 34 : 40;
+  const radiusX = 40;
   const radiusY = 44;
   const x = 50 + radiusX * Math.sin(angle);
   const y = 50 - radiusY * Math.cos(angle);
