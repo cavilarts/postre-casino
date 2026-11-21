@@ -30,6 +30,14 @@ export function ActionBar(props: ActionBarProps) {
   const canRaise = () => maxTo() > props.currentBet;
 
   const [raiseTo, setRaiseTo] = createSignal(() => minTo());
+  /** Raw text while the raise box is being edited, so clearing it doesn't write "0" back. */
+  const [draft, setDraft] = createSignal<string | null>(null);
+
+  /** Sets the raise from a preset, replacing whatever was typed. */
+  const choose = (amount: number) => {
+    setDraft(null);
+    setRaiseTo(amount);
+  };
 
   const clampedRaise = () => Math.min(Math.max(raiseTo() || 0, minTo()), maxTo());
 
@@ -45,7 +53,7 @@ export function ActionBar(props: ActionBarProps) {
   const potRaise = (fraction: number) => {
     const toCall = props.actions.toCall;
     const target = props.currentBet + Math.round((props.pot + toCall) * fraction);
-    setRaiseTo(target);
+    choose(target);
   };
 
   return (
@@ -74,7 +82,7 @@ export function ActionBar(props: ActionBarProps) {
       {canRaise() ? (
         <div class="flex min-w-[260px] flex-1 flex-col gap-2 max-sm:min-w-0 max-sm:basis-full">
           <div class="flex flex-wrap gap-1.5">
-            <button class={CHIP} onClick={() => setRaiseTo(minTo())}>
+            <button class={CHIP} onClick={() => choose(minTo())}>
               Min
             </button>
             <button class={CHIP} onClick={() => potRaise(0.5)}>
@@ -83,7 +91,7 @@ export function ActionBar(props: ActionBarProps) {
             <button class={CHIP} onClick={() => potRaise(1)}>
               Pot
             </button>
-            <button class={CHIP} onClick={() => setRaiseTo(maxTo())}>
+            <button class={CHIP} onClick={() => choose(maxTo())}>
               Max
             </button>
           </div>
@@ -94,8 +102,13 @@ export function ActionBar(props: ActionBarProps) {
               min={minTo()}
               max={maxTo()}
               step={1}
-              value={raiseTo()}
-              onInput={e => setRaiseTo(Number(e.currentTarget.value))}
+              value={draft() ?? String(raiseTo())}
+              onInput={e => {
+                const raw = e.currentTarget.value;
+                setDraft(raw);
+                setRaiseTo(raw === "" ? 0 : Number(raw));
+              }}
+              onBlur={() => setDraft(null)}
             />
             <button class={BTN_RAISE} onClick={submitRaise}>
               {clampedRaise() >= maxTo() ? "All-in" : `Raise to ${formatChips(clampedRaise())}`}
