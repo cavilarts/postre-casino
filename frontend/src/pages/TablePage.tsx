@@ -1,4 +1,4 @@
-import { createSignal, For, onSettled } from "solid-js";
+import { createSignal, For, onSettled, Show } from "solid-js";
 import { getTable, loadIdentity, loadLook, socketUrl } from "../api";
 import { ActionBar } from "../components/ActionBar";
 import { Card } from "../components/Card";
@@ -146,11 +146,13 @@ export function TablePage(props: { code: string; navigate: (to: string) => void 
 
   const inviteUrl = () => tableInviteUrl(props.code);
 
-  const copyInvite = async () => {
+  const copyInvite = async (viaMenu = false) => {
     if (!(await copyText(inviteUrl()))) {
       notify("Copy the link from the box above");
       return;
     }
+    // The menu closes on selection, so confirm with a toast instead of the button label.
+    if (viaMenu) notify("Invite link copied");
     setCopied(true);
     setTimeout(() => setCopied(false), 1500);
   };
@@ -161,49 +163,113 @@ export function TablePage(props: { code: string; navigate: (to: string) => void 
     props.navigate("/");
   };
 
+  interface TableAction {
+    label: string;
+    run: (viaMenu?: boolean) => void;
+    title?: string;
+  }
+
+  /** Table actions: a row of buttons on desktop, the ⋯ menu below `lg`. */
+  const tableActions = (): TableAction[] => {
+    const v = view();
+    return [
+      { label: copied() ? "Link copied" : "Invite friends", run: copyInvite, title: inviteUrl() } as TableAction,
+      ...(v ? [{ label: "+ Bot", run: () => send({ type: "addBot" }) }] : []),
+      ...(v?.seats.some(s => s?.isBot) ? [{ label: "Remove bots", run: () => send({ type: "removeBots" }) }] : []),
+      ...(v && v.you !== null ? [{ label: "Stand up", run: () => send({ type: "stand" }) }] : []),
+    ];
+  };
+
+  const [menuOpen, setMenuOpen] = createSignal(false);
+  let menuEl: HTMLDivElement | undefined;
+  let menuButton: HTMLButtonElement | undefined;
+
+  const closeMenu = (refocus = false) => {
+    setMenuOpen(false);
+    if (refocus) menuButton?.focus();
+  };
+
+  onSettled(() => {
+    const onPointerDown = (event: PointerEvent) => {
+      if (menuOpen() && menuEl && !menuEl.contains(event.target as Node)) closeMenu();
+    };
+    document.addEventListener("pointerdown", onPointerDown);
+    return () => document.removeEventListener("pointerdown", onPointerDown);
+  });
+
   const sit = (seat: number) => send({ type: "sit", seat, look: loadLook() });
   const act = (action: Action) => send({ type: "act", action });
 
   return (
     <div class="flex min-h-[100dvh] flex-col gap-3 px-5 pt-4 pb-6 lg:h-[100dvh] lg:min-h-0 lg:gap-2 lg:overflow-hidden lg:px-4 lg:pt-2.5 lg:pb-3">
-      <header class="mx-auto flex w-full max-w-[1280px] items-center gap-4 lg:flex-none">
-        <button class={GHOST_BTN} onClick={leave}>
-          ← Lobby
+      <header class="mx-auto flex w-full max-w-[1280px] items-center gap-4 max-lg:gap-2.5 lg:flex-none">
+        <button class={`${GHOST_BTN} flex-none max-lg:px-2`} onClick={leave} aria-label="Back to lobby">
+          ← <span class="max-sm:hidden">Lobby</span>
         </button>
-        <div class="flex flex-1 flex-col gap-1.5">
-          <h1 class="text-sm">{view()?.name ?? "Table"}</h1>
-          <span class="text-xl text-muted">
+        <div class="flex min-w-0 flex-1 flex-col gap-1.5 max-lg:gap-1">
+          <h1 class="truncate text-sm max-sm:text-xs">{view()?.name ?? "Table"}</h1>
+          <span class="truncate text-xl text-muted max-sm:text-lg">
             Blinds {view()?.smallBlind ?? "–"}/{view()?.bigBlind ?? "–"} · Buy-in{" "}
             {view() ? formatChips(view()!.buyIn) : "–"}
           </span>
         </div>
-        <div class="flex items-center gap-2.5">
+        <div class="flex flex-none items-center gap-2.5">
           <span
             class={[
               "border-[3px] bg-wood-dark px-2 text-xl",
               connected() ? "border-green-dark text-[#bff0a0]" : "border-wood text-muted",
             ]}
+            role="status"
+            title={connected() ? "Connected" : "Reconnecting…"}
           >
-            {connected() ? "Live" : "Reconnecting…"}
+            {connected() ? "Live" : <span aria-label="Reconnecting…">…</span>}
           </span>
-          <button class={GHOST_BTN} onClick={copyInvite} title={inviteUrl()}>
-            {copied() ? "Link copied" : "Invite friends"}
-          </button>
-          {view() !== null ? (
-            <button class={GHOST_BTN} onClick={() => send({ type: "addBot" })}>
-              + Bot
+          <For each={tableActions()}>
+            {action => (
+              <button class={`${GHOST_BTN} max-lg:hidden`} onClick={() => action.run()} title={action.title}>
+                {action.label}
+              </button>
+            )}
+          </For>
+          <div
+            class="relative lg:hidden"
+            ref={el => (menuEl = el)}
+            onKeyDown={event => {
+              if (event.key === "Escape" && menuOpen()) closeMenu(true);
+            }}
+          >
+            <button
+              ref={el => (menuButton = el)}
+              class={`${GHOST_BTN} px-3`}
+              aria-label="More actions"
+              aria-expanded={menuOpen() ? "true" : "false"}
+              aria-controls="table-actions"
+              onClick={() => setMenuOpen(open => !open)}
+            >
+              ⋯
             </button>
-          ) : null}
-          {view() !== null && view()!.seats.some(s => s?.isBot) ? (
-            <button class={GHOST_BTN} onClick={() => send({ type: "removeBots" })}>
-              Remove bots
-            </button>
-          ) : null}
-          {view() !== null && view()!.you !== null ? (
-            <button class={GHOST_BTN} onClick={() => send({ type: "stand" })}>
-              Stand up
-            </button>
-          ) : null}
+            <Show when={menuOpen()}>
+              <div
+                id="table-actions"
+                class="absolute right-0 top-full z-50 mt-2 flex min-w-[190px] flex-col gap-2 border-4 border-wood bg-parchment p-2 shadow-pixel"
+              >
+                <For each={tableActions()}>
+                  {action => (
+                    <button
+                      class={`${GHOST_BTN} w-full text-left`}
+                      title={action.title}
+                      onClick={() => {
+                        action.run(true);
+                        closeMenu(true);
+                      }}
+                    >
+                      {action.label}
+                    </button>
+                  )}
+                </For>
+              </div>
+            </Show>
+          </div>
         </div>
       </header>
 
