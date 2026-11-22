@@ -586,8 +586,13 @@ impl Table {
 
         // Only a full raise reopens the betting. After an incomplete all-in raise,
         // players who already acted may only call or fold (see `can_raise`).
-        if size >= self.min_raise {
+        // An opening bet always reopens it, even a short all-in one: players who
+        // checked haven't faced a bet yet. A short bet doesn't lower the raise size.
+        let full = size >= self.min_raise;
+        if full {
             self.min_raise = size;
+        }
+        if full || prev == 0 {
             for (i, slot) in self.seats.iter_mut().enumerate() {
                 if let Some(seat) = slot
                     && i != idx
@@ -610,7 +615,7 @@ impl Table {
     fn can_raise(&self, idx: usize) -> bool {
         let seat = self.seat(idx);
         let has_chips = seat.bet + seat.stack > self.current_bet;
-        has_chips && (!seat.acted || self.current_bet - seat.bet >= self.min_raise)
+        has_chips && (!seat.acted || self.current_bet.saturating_sub(seat.bet) >= self.min_raise)
     }
 
     /// Seat that must act next, or None when the betting round is complete.
@@ -1068,6 +1073,35 @@ mod tests {
         act_as(&mut t, Action::Call, now).unwrap();
         assert_eq!(t.to_act, Some(a));
         assert!(actions_for(&t, a, now).can_raise);
+    }
+
+    #[test]
+    fn short_all_in_opening_bet_lets_checked_players_raise() {
+        let now = Instant::now();
+        let mut t = table(6);
+        sit_all(&mut t, 3, now);
+        t.tick(now + NEXT_HAND_DELAY);
+        // Everyone limps preflop so the flop opens with no bet.
+        act_as(&mut t, Action::Call, now).unwrap();
+        act_as(&mut t, Action::Call, now).unwrap();
+        act_as(&mut t, Action::Check, now).unwrap();
+        assert_eq!(t.stage, Stage::Flop);
+
+        let a = t.to_act.unwrap();
+        act_as(&mut t, Action::Check, now).unwrap();
+        // B opens all-in for 5, half the big blind.
+        let b = t.to_act.unwrap();
+        t.seat_mut(b).stack = 5;
+        act_as(&mut t, Action::AllIn, now).unwrap();
+        assert_eq!(t.current_bet, 5);
+        assert_eq!(t.min_raise, 10, "a short bet doesn't lower the raise size");
+
+        act_as(&mut t, Action::Call, now).unwrap();
+        assert_eq!(t.to_act, Some(a));
+        let view = actions_for(&t, a, now);
+        assert!(view.can_raise, "a player who only checked may raise a short opening bet");
+        assert_eq!(view.min_raise_to, 15);
+        act_as(&mut t, Action::Raise { amount: 15 }, now).unwrap();
     }
 
     #[test]
