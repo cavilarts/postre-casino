@@ -65,8 +65,6 @@ const SUITS: Record<Suit, string[]> = {
 };
 
 const CELL = 11;
-const GAP = 3;
-const EDGE = 2; // 1px border + 1px padding
 const ORDER: Suit[] = ["s", "h", "d", "c"];
 const RED: Record<Suit, boolean> = { s: false, h: true, d: true, c: false };
 
@@ -79,17 +77,20 @@ const PALETTE: Record<string, string> = {
   p: "#ec8a70", // red suit highlight
 };
 
-/** Draws the four suits on a bordered cream tile, `perRow` suits per row. */
-function suitTile(perRow: number): PixelArt {
+/**
+ * Draws the four suits on a bordered cream tile, `perRow` suits per row.
+ * `edge` is the 1px border plus padding; `gap` is the space between suits.
+ */
+export function suitTile(perRow: number, edge: number, gap: number): PixelArt {
   const rows = Math.ceil(ORDER.length / perRow);
-  const width = EDGE * 2 + perRow * CELL + (perRow - 1) * GAP;
-  const height = EDGE * 2 + rows * CELL + (rows - 1) * GAP;
+  const width = edge * 2 + perRow * CELL + (perRow - 1) * gap;
+  const height = edge * 2 + rows * CELL + (rows - 1) * gap;
   const grid: string[][] = Array.from({ length: height }, (_, y) =>
     Array.from({ length: width }, (_, x) => (x === 0 || y === 0 || x === width - 1 || y === height - 1 ? "K" : "b")),
   );
   ORDER.forEach((suit, i) => {
-    const ox = EDGE + (i % perRow) * (CELL + GAP);
-    const oy = EDGE + Math.floor(i / perRow) * (CELL + GAP);
+    const ox = edge + (i % perRow) * (CELL + gap);
+    const oy = edge + Math.floor(i / perRow) * (CELL + gap);
     SUITS[suit].forEach((row, y) => {
       [...row].forEach((ch, x) => {
         if (ch === "X") grid[oy + y][ox + x] = RED[suit] ? "r" : "k";
@@ -100,14 +101,5 @@ function suitTile(perRow: number): PixelArt {
   return { width, height, layers: toLayers(grid.map(row => row.join("")), PALETTE) };
 }
 
-/** Header logo: ♠ ♥ ♦ ♣ side by side. Render at a multiple of its height (15) for even pixels. */
-export const LOGO: PixelArt = suitTile(4);
-
-/** Square browser-tab icon (♠ ♥ / ♦ ♣), since a row would be unreadable at 16px. */
-export const ICON: PixelArt = suitTile(2);
-
-/** Standalone SVG markup, used to generate public/favicon.svg from ICON. */
-export function toSvg(art: PixelArt): string {
-  const paths = art.layers.map(l => `<path d="${l.d}" fill="${l.color}"/>`).join("");
-  return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${art.width} ${art.height}" shape-rendering="crispEdges">${paths}</svg>\n`;
-}
+/** Header logo: ♠ ♥ ♦ ♣ side by side, 57x15. Render at a multiple of its height for even pixels. */
+export const LOGO: PixelArt = suitTile(4, 2, 3);

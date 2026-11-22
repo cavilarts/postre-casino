@@ -95,7 +95,7 @@ export function Lobby(props: { navigate: (to: string) => void }) {
     <div class="mx-auto max-w-[1180px] px-5 pt-7 pb-[60px]">
       <header class="mb-[26px] flex flex-wrap items-center justify-between gap-4">
         <div class="flex items-center gap-4 max-sm:flex-col max-sm:items-start max-sm:gap-3">
-          <Logo height={45} class="block shrink-0 shadow-pixel" />
+          <Logo height={45} class="block shrink-0 shadow-pixel" decorative />
           <div>
             <h1 class="text-xl text-cream">Postre Poker</h1>
             <p class="mt-2 text-[22px] text-muted">Texas Hold'em with your crew</p>
