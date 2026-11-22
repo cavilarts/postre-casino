@@ -30,6 +30,7 @@ async fn main() {
 
     let state = AppState {
         lobby: Arc::new(Lobby::default()),
+        trust_proxy: std::env::var("TRUST_PROXY").is_ok_and(|v| v == "1" || v.eq_ignore_ascii_case("true")),
     };
 
     let app = web::router(state)

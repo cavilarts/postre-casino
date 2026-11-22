@@ -13,6 +13,11 @@ pub const NEXT_HAND_DELAY: Duration = Duration::from_secs(5);
 pub const BOT_THINK: Duration = Duration::from_millis(1200);
 const BOT_NAMES: [&str; 6] = ["Ace", "Bluff", "Chip", "Dealer", "Lucky", "River"];
 const LOG_CAP: usize = 80;
+/// How long a dropped player has to reconnect (a page reload, a network
+/// blip) before they count as away.
+pub const AWAY_GRACE: Duration = Duration::from_secs(10);
+/// A player away this long gives up their seat.
+pub const AWAY_SEAT_TIMEOUT: Duration = Duration::from_secs(15 * 60);
 const CHAT_CAP: usize = 100;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
@@ -49,9 +54,10 @@ pub struct Seat {
     pub acted: bool,
     /// Stood up mid-hand; removed once the hand ends.
     pub leaving: bool,
-    /// A human with no open connection. Sits out of new hands, so their stack
-    /// keeps until they reconnect or the table closes.
-    pub away: bool,
+    /// When a human's last connection closed, if it hasn't reopened. After
+    /// `AWAY_GRACE` they sit out of new hands, so their stack keeps until they
+    /// reconnect, the table closes, or `AWAY_SEAT_TIMEOUT` frees the seat.
+    pub away_since: Option<Instant>,
 }
 
 impl Seat {
@@ -69,7 +75,7 @@ impl Seat {
             all_in: false,
             acted: false,
             leaving: false,
-            away: false,
+            away_since: None,
         }
     }
 
@@ -78,8 +84,13 @@ impl Seat {
     }
 
     /// Can be dealt into the next hand.
-    fn dealable(&self) -> bool {
-        self.stack > 0 && !self.leaving && !self.away
+    fn dealable(&self, now: Instant) -> bool {
+        self.stack > 0 && !self.leaving && !self.is_away(now)
+    }
+
+    /// Disconnected for longer than the grace period.
+    fn is_away(&self, now: Instant) -> bool {
+        self.away_since.is_some_and(|since| now.duration_since(since) >= AWAY_GRACE)
     }
 
     fn can_act(&self) -> bool {
@@ -180,7 +191,7 @@ impl Table {
             return Err("You are already seated at this table".into());
         }
         let mut new_seat = Seat::new(player_id, name, look, self.config.buy_in);
-        new_seat.away = !self.connections.contains_key(player_id);
+        new_seat.away_since = (!self.connections.contains_key(player_id)).then_some(now);
         self.seats[seat] = Some(new_seat);
         self.push_log(format!("{name} sat down in seat {}", seat + 1));
         self.schedule_next_hand(now);
@@ -226,19 +237,20 @@ impl Table {
     /// is dealt back in.
     pub fn connect(&mut self, player_id: &str, now: Instant) {
         *self.connections.entry(player_id.to_string()).or_default() += 1;
-        if let Some(idx) = self.seat_of(player_id)
-            && self.seat(idx).away
-        {
-            self.seat_mut(idx).away = false;
-            let name = self.seat_name(idx);
-            self.push_log(format!("{name} is back"));
+        if let Some(idx) = self.seat_of(player_id) {
+            let was_away = self.seat(idx).is_away(now);
+            self.seat_mut(idx).away_since = None;
+            if was_away {
+                let name = self.seat_name(idx);
+                self.push_log(format!("{name} is back"));
+            }
         }
         self.schedule_next_hand(now);
     }
 
     /// Records a closed connection. When a seated player's last connection
-    /// closes they sit out; when the last connection of all closes, no new
-    /// hand is dealt.
+    /// closes they sit out once `AWAY_GRACE` passes; when the last connection
+    /// of all closes, no new hand is dealt.
     pub fn disconnect(&mut self, player_id: &str, now: Instant) {
         let Some(count) = self.connections.get_mut(player_id) else { return };
         *count -= 1;
@@ -249,9 +261,7 @@ impl Table {
         if let Some(idx) = self.seat_of(player_id)
             && !self.seat(idx).leaving
         {
-            self.seat_mut(idx).away = true;
-            let name = self.seat_name(idx);
-            self.push_log(format!("{name} is away and sits out"));
+            self.seat_mut(idx).away_since = Some(now);
         }
         self.schedule_next_hand(now);
     }
@@ -302,7 +312,20 @@ impl Table {
     pub fn tick(&mut self, now: Instant) -> bool {
         // An away player can't act, so check or fold for them instead of
         // holding up the hand for the full timer.
-        if let Some(idx) = self.to_act.filter(|&i| self.seat(i).away) {
+        let expired: Vec<String> = self
+            .seats
+            .iter()
+            .flatten()
+            .filter(|s| s.away_since.is_some_and(|since| now.duration_since(since) >= AWAY_SEAT_TIMEOUT))
+            .map(|s| s.player_id.clone())
+            .collect();
+        if !expired.is_empty() {
+            for player_id in expired {
+                let _ = self.stand(&player_id, now);
+            }
+            return true;
+        }
+        if let Some(idx) = self.to_act.filter(|&i| self.seat(i).is_away(now)) {
             let to_call = self.current_bet.saturating_sub(self.seat(idx).bet);
             let action = if to_call == 0 { Action::Check } else { Action::Fold };
             self.take_action(idx, action, now);
@@ -357,7 +380,7 @@ impl Table {
                         folded: s.folded,
                         all_in: s.all_in,
                         leaving: s.leaving,
-                        away: s.away,
+                        away: s.is_away(now),
                         is_you: Some(i) == you,
                         is_button: self.button == Some(i),
                         is_turn: self.to_act == Some(i),
@@ -450,18 +473,18 @@ impl Table {
             .find(|&i| self.seats[i].as_ref().is_some_and(&pred))
     }
 
-    fn eligible_count(&self) -> usize {
+    fn eligible_count(&self, now: Instant) -> usize {
         self.seats
             .iter()
             .flatten()
-            .filter(|s| s.dealable())
+            .filter(|s| s.dealable(now))
             .count()
     }
 
     /// Whether a new hand can be dealt: two players can play and someone is
     /// connected to see it.
-    fn can_deal(&self) -> bool {
-        !self.connections.is_empty() && self.eligible_count() >= 2
+    fn can_deal(&self, now: Instant) -> bool {
+        !self.connections.is_empty() && self.eligible_count(now) >= 2
     }
 
     fn push_log(&mut self, msg: String) {
@@ -475,7 +498,7 @@ impl Table {
         if self.stage.is_betting() {
             return;
         }
-        if self.can_deal() {
+        if self.can_deal(now) {
             if self.next_hand_at.is_none() {
                 self.next_hand_at = Some(now + NEXT_HAND_DELAY);
             }
@@ -744,7 +767,7 @@ impl Table {
             seat.folded = false;
             seat.all_in = false;
             seat.acted = false;
-            seat.in_hand = seat.dealable();
+            seat.in_hand = seat.dealable(now);
         }
         self.next_hand_at = None;
 
@@ -1223,11 +1246,12 @@ mod tests {
         assert!(t.seat(idx).folded);
     }
 
-    /// Plays until the hand in progress ends, everyone checking or calling.
+    /// Plays until the hand in progress ends, everyone present checking or
+    /// calling.
     fn finish_hand(t: &mut Table, mut now: Instant) -> Instant {
         while t.stage.is_betting() {
             now += Duration::from_millis(250);
-            if let Some(idx) = t.to_act.filter(|&i| !t.seat(i).away) {
+            if let Some(idx) = t.to_act.filter(|&i| t.seat(i).away_since.is_none()) {
                 t.take_action(idx, Action::Call, now);
             } else {
                 t.tick(now);
@@ -1242,8 +1266,8 @@ mod tests {
         let mut t = table(6);
         sit_all(&mut t, 3, now);
         t.disconnect("p0", now);
-        assert!(t.seat(0).away);
-        let now = now + NEXT_HAND_DELAY;
+        let now = now + AWAY_GRACE.max(NEXT_HAND_DELAY);
+        assert!(t.seat(0).is_away(now));
         t.tick(now);
         assert!(t.stage.is_betting());
         assert!(!t.seat(0).in_hand, "an away player is not dealt in");
@@ -1252,7 +1276,25 @@ mod tests {
     }
 
     #[test]
-    fn away_player_is_acted_for_without_waiting_for_the_timer() {
+    fn a_quick_reconnect_keeps_the_hand() {
+        let now = Instant::now();
+        let mut t = table(6);
+        sit_all(&mut t, 3, now);
+        let now = now + NEXT_HAND_DELAY;
+        t.tick(now);
+        let idx = t.to_act.unwrap();
+        let id = format!("p{idx}");
+        t.disconnect(&id, now);
+        assert!(!t.tick(now + AWAY_GRACE - Duration::from_secs(1)));
+        assert!(!t.seat(idx).folded, "a reload within the grace period doesn't fold");
+        t.connect(&id, now + AWAY_GRACE - Duration::from_millis(500));
+        t.tick(now + AWAY_GRACE + Duration::from_secs(1));
+        assert!(!t.seat(idx).folded);
+        assert_eq!(t.to_act, Some(idx));
+    }
+
+    #[test]
+    fn away_player_is_acted_for_after_the_grace_period() {
         let now = Instant::now();
         let mut t = table(6);
         sit_all(&mut t, 3, now);
@@ -1260,7 +1302,7 @@ mod tests {
         t.tick(now);
         let idx = t.to_act.unwrap();
         t.disconnect(&format!("p{idx}"), now);
-        assert!(t.tick(now + Duration::from_millis(250)));
+        assert!(t.tick(now + AWAY_GRACE));
         assert!(t.seat(idx).folded, "facing the big blind, an away player folds");
         assert_ne!(t.to_act, Some(idx));
     }
@@ -1272,15 +1314,31 @@ mod tests {
         sit_all(&mut t, 2, now);
         t.connect("p0", now);
         t.disconnect("p0", now);
-        assert!(!t.seat(0).away, "another connection is still open");
+        assert!(t.seat(0).away_since.is_none(), "another connection is still open");
         t.disconnect("p0", now);
-        assert!(t.seat(0).away);
-        assert!(t.next_hand_at.is_none(), "one dealable player can't start a hand");
+        let later = now + AWAY_GRACE;
+        assert!(t.seat(0).is_away(later));
+        t.tick(later);
+        assert_ne!(t.stage, Stage::Preflop, "one dealable player can't start a hand");
 
-        t.connect("p0", now);
-        assert!(!t.seat(0).away);
-        t.tick(now + NEXT_HAND_DELAY);
+        t.connect("p0", later);
+        assert!(t.seat(0).away_since.is_none());
+        t.tick(later + NEXT_HAND_DELAY);
         assert!(t.seat(0).in_hand);
+    }
+
+    #[test]
+    fn a_long_absence_frees_the_seat() {
+        let now = Instant::now();
+        let mut t = table(2);
+        sit_all(&mut t, 2, now);
+        t.connect("watcher", now);
+        t.disconnect("p0", now);
+        t.tick(now + AWAY_SEAT_TIMEOUT - Duration::from_secs(1));
+        assert!(t.seats[0].is_some());
+        let later = finish_hand(&mut t, now + AWAY_SEAT_TIMEOUT);
+        t.tick(later);
+        assert!(t.seats[0].is_none(), "the seat opens for someone else");
     }
 
     #[test]

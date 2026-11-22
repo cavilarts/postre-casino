@@ -16,6 +16,14 @@ import { tableInviteUrl } from "../utils/table";
 import { remainingFraction, secondsRemaining } from "../utils/time";
 
 const TABLE_CLOSED = "This table has closed. Tables close after sitting empty for a while.";
+const CONNECTION_LOST = "Lost connection to the table. Reload the page to try again.";
+/** Reconnect attempts in a row without the socket opening before giving up. */
+const MAX_RETRIES = 6;
+
+/** Waits 1.5s, 3s, 6s... up to 15s between reconnect attempts. */
+function retryDelay(attempt: number): number {
+  return Math.min(1500 * 2 ** (attempt - 1), 15000);
+}
 
 const NOTICE = "mx-auto my-[60px] flex flex-col items-center gap-3.5 text-center text-muted";
 
@@ -79,11 +87,24 @@ export function TablePage(props: { code: string; navigate: (to: string) => void 
   onSettled(() => {
     let disposed = false;
     let retry: number | undefined;
+    let failures = 0;
+
+    const scheduleRetry = () => {
+      failures += 1;
+      if (failures > MAX_RETRIES) {
+        setFatal(CONNECTION_LOST);
+        return;
+      }
+      retry = window.setTimeout(reconnect, retryDelay(failures));
+    };
 
     const connect = () => {
       const ws = new WebSocket(socketUrl(props.code, loadIdentity()));
       socket = ws;
-      ws.onopen = () => setConnected(true);
+      ws.onopen = () => {
+        failures = 0;
+        setConnected(true);
+      };
       ws.onmessage = event => {
         const message = JSON.parse(event.data) as ServerMessage;
         if (message.type === "state") {
@@ -97,9 +118,7 @@ export function TablePage(props: { code: string; navigate: (to: string) => void 
       };
       ws.onclose = () => {
         setConnected(false);
-        if (!disposed) {
-          retry = window.setTimeout(reconnect, 1500);
-        }
+        if (!disposed) scheduleRetry();
       };
     };
 
@@ -115,7 +134,7 @@ export function TablePage(props: { code: string; navigate: (to: string) => void 
           if (error instanceof ApiError && error.status === 404) {
             setFatal(TABLE_CLOSED);
           } else {
-            retry = window.setTimeout(reconnect, 1500);
+            scheduleRetry();
           }
         });
     };

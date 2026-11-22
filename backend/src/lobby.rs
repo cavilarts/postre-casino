@@ -1,5 +1,5 @@
 use std::collections::HashMap;
-use std::net::IpAddr;
+use std::net::{IpAddr, Ipv6Addr};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, Weak};
 use std::time::{Duration, Instant};
@@ -21,6 +21,9 @@ pub const MAX_TABLES_PER_CLIENT: usize = 5;
 /// How long a table that nobody has ever connected to survives. Kept short so
 /// tables created and never used give their slot back quickly.
 const UNJOINED_IDLE_TIMEOUT: Duration = Duration::from_secs(30);
+/// Longest a table nobody has ever connected to can live, however often it is
+/// looked up.
+const UNJOINED_MAX_AGE: Duration = Duration::from_secs(5 * 60);
 /// How long a table with nobody connected and no humans seated survives.
 const EMPTY_IDLE_TIMEOUT: Duration = Duration::from_secs(2 * 60);
 /// How long a table with nobody connected but humans still seated survives,
@@ -33,11 +36,13 @@ pub struct TableHandle {
     /// Pinged after every state change; each connection re-renders its view.
     pub updates: broadcast::Sender<()>,
     viewers: AtomicUsize,
-    /// Address of the client that created the table, for the per-client cap.
+    /// Client that created the table (see `client_key`), for the per-client cap.
     creator: IpAddr,
-    /// Set once anyone has connected.
+    created: Instant,
+    /// Set once a WebSocket connection has gone live.
     joined: AtomicBool,
-    /// Set by a REST lookup; the ticker takes it and resets the idle clock.
+    /// Set by a REST lookup; until the table is joined, the ticker takes it
+    /// and resets the idle clock.
     touched: AtomicBool,
 }
 
@@ -69,6 +74,12 @@ impl Viewer {
     pub fn table(&self) -> &Arc<TableHandle> {
         &self.handle
     }
+
+    /// Call once the WebSocket is live, so a failed or abandoned upgrade
+    /// doesn't count the table as used.
+    pub fn mark_joined(&self) {
+        self.handle.joined.store(true, Ordering::Relaxed);
+    }
 }
 
 impl Drop for Viewer {
@@ -96,6 +107,7 @@ impl Lobby {
         self.tables.lock().unwrap_or_else(|p| p.into_inner())
     }
 
+    /// `creator` is the client's address; IPv6 addresses are grouped by /64.
     pub fn create(self: &Arc<Self>, config: TableConfig, creator: IpAddr) -> Result<Arc<TableHandle>, CreateError> {
         let handle = self.insert(config, creator)?;
         spawn_ticker(Arc::downgrade(self), handle.clone());
@@ -103,6 +115,7 @@ impl Lobby {
     }
 
     fn insert(&self, config: TableConfig, creator: IpAddr) -> Result<Arc<TableHandle>, CreateError> {
+        let creator = client_key(creator);
         let mut tables = self.tables();
         if tables.len() >= MAX_TABLES {
             return Err(CreateError::Full);
@@ -123,6 +136,7 @@ impl Lobby {
             updates,
             viewers: AtomicUsize::new(0),
             creator,
+            created: Instant::now(),
             joined: AtomicBool::new(false),
             touched: AtomicBool::new(false),
         });
@@ -134,8 +148,8 @@ impl Lobby {
         self.tables().get(&code.to_ascii_uppercase()).cloned()
     }
 
-    /// Looks up a table and counts the lookup as activity, so a table someone
-    /// is about to join isn't removed between the lookup and the join.
+    /// Looks up a table and, until someone has joined it, counts the lookup as
+    /// activity so it isn't removed between the lookup and the join.
     pub fn touch(&self, code: &str) -> Option<Arc<TableHandle>> {
         let handle = self.get(code)?;
         handle.touched.store(true, Ordering::Relaxed);
@@ -148,7 +162,6 @@ impl Lobby {
         let tables = self.tables();
         let handle = tables.get(&code.to_ascii_uppercase())?.clone();
         handle.viewers.fetch_add(1, Ordering::Relaxed);
-        handle.joined.store(true, Ordering::Relaxed);
         drop(tables);
         handle.notify();
         Some(Viewer { handle })
@@ -182,6 +195,7 @@ struct Activity {
     viewers: usize,
     humans_seated: bool,
     ever_joined: bool,
+    age: Duration,
 }
 
 /// Tracks how long a table has gone without viewers.
@@ -197,6 +211,9 @@ impl IdleTracker {
             self.since = None;
             return false;
         }
+        if !activity.ever_joined && activity.age >= UNJOINED_MAX_AGE {
+            return true;
+        }
         let since = *self.since.get_or_insert(now);
         let limit = if activity.humans_seated {
             SEATED_IDLE_TIMEOUT
@@ -210,6 +227,15 @@ impl IdleTracker {
 
     fn reset(&mut self) {
         self.since = None;
+    }
+}
+
+/// Identifies a client for the per-client cap. One IPv6 client usually holds
+/// a whole /64, so IPv6 addresses are grouped by that prefix.
+fn client_key(ip: IpAddr) -> IpAddr {
+    match ip.to_canonical() {
+        IpAddr::V6(v6) => IpAddr::V6(Ipv6Addr::from(v6.to_bits() & !((1u128 << 64) - 1))),
+        v4 => v4,
     }
 }
 
@@ -234,13 +260,15 @@ fn spawn_ticker(lobby: Weak<Lobby>, handle: Arc<TableHandle>) {
             if changed {
                 handle.notify();
             }
-            if handle.take_touch() {
+            let ever_joined = handle.joined.load(Ordering::Relaxed);
+            if handle.take_touch() && !ever_joined {
                 idle.reset();
             }
             let activity = Activity {
                 viewers: handle.viewers(),
                 humans_seated,
-                ever_joined: handle.joined.load(Ordering::Relaxed),
+                ever_joined,
+                age: now.duration_since(handle.created),
             };
             if idle.expired(now, activity) {
                 let Some(lobby) = lobby.upgrade() else { break };
@@ -281,6 +309,7 @@ mod tests {
             viewers,
             humans_seated,
             ever_joined: true,
+            age: Duration::ZERO,
         }
     }
 
@@ -322,6 +351,8 @@ mod tests {
         let handle = lobby.insert(config(), ip(1)).unwrap();
         let viewer = lobby.join(&handle.code).unwrap();
         assert_eq!(handle.viewers(), 1);
+        assert!(!handle.joined.load(Ordering::Relaxed), "joined only once the socket is live");
+        viewer.mark_joined();
         assert!(handle.joined.load(Ordering::Relaxed));
         assert!(!lobby.remove_if_unwatched(&handle));
         assert!(lobby.get(&handle.code).is_some());
@@ -365,6 +396,35 @@ mod tests {
         assert!(!tracker.expired(start, unjoined));
         assert!(!tracker.expired(start + UNJOINED_IDLE_TIMEOUT - Duration::from_secs(1), unjoined));
         assert!(tracker.expired(start + UNJOINED_IDLE_TIMEOUT, unjoined));
+    }
+
+    #[test]
+    fn never_joined_table_has_a_max_age() {
+        let start = Instant::now();
+        let old = Activity {
+            age: UNJOINED_MAX_AGE,
+            ..Activity::default()
+        };
+        assert!(IdleTracker::default().expired(start, old));
+        let joined = Activity { ever_joined: true, ..old };
+        assert!(!IdleTracker::default().expired(start, joined));
+    }
+
+    #[test]
+    fn ipv6_clients_are_grouped_by_slash_64() {
+        let a: IpAddr = "2001:db8:1:2:aaaa::1".parse().unwrap();
+        let b: IpAddr = "2001:db8:1:2:bbbb::2".parse().unwrap();
+        let other: IpAddr = "2001:db8:1:3::1".parse().unwrap();
+        assert_eq!(client_key(a), client_key(b));
+        assert_ne!(client_key(a), client_key(other));
+        let mapped: IpAddr = "::ffff:192.0.2.7".parse().unwrap();
+        assert_eq!(client_key(mapped), "192.0.2.7".parse::<IpAddr>().unwrap());
+
+        let lobby = Lobby::default();
+        for _ in 0..MAX_TABLES_PER_CLIENT {
+            lobby.insert(config(), a).unwrap();
+        }
+        assert_eq!(lobby.insert(config(), b).err(), Some(CreateError::TooManyForClient));
     }
 
     #[test]

@@ -1,4 +1,4 @@
-use std::net::SocketAddr;
+use std::net::{IpAddr, SocketAddr};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -6,7 +6,7 @@ use axum::Json;
 use axum::Router;
 use axum::extract::ws::{Message, WebSocket};
 use axum::extract::{ConnectInfo, Path, Query, State, WebSocketUpgrade};
-use axum::http::StatusCode;
+use axum::http::{HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::routing::get;
 use futures_util::sink::SinkExt;
@@ -29,6 +29,9 @@ const SEND_TIMEOUT: Duration = Duration::from_secs(10);
 #[derive(Clone)]
 pub struct AppState {
     pub lobby: Arc<Lobby>,
+    /// Take the client address from `X-Forwarded-For` (set when running behind
+    /// a reverse proxy) instead of the TCP peer.
+    pub trust_proxy: bool,
 }
 
 pub fn router(state: AppState) -> Router {
@@ -60,10 +63,12 @@ struct CreateTable {
 async fn create_table(
     State(app): State<AppState>,
     ConnectInfo(addr): ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
     Json(body): Json<CreateTable>,
 ) -> Result<Json<TableSummary>, ApiError> {
     let config = validate_config(body).map_err(|msg| (StatusCode::BAD_REQUEST, msg))?;
-    let handle = app.lobby.create(config, addr.ip()).map_err(|err| match err {
+    let client = client_ip(addr, &headers, app.trust_proxy);
+    let handle = app.lobby.create(config, client).map_err(|err| match err {
         CreateError::Full => (
             StatusCode::SERVICE_UNAVAILABLE,
             "Too many tables are open right now. Try again in a few minutes.".to_string(),
@@ -87,6 +92,25 @@ async fn get_table(
         .ok_or((StatusCode::NOT_FOUND, "No table with that code".to_string()))?;
     let summary = handle.lock().summary();
     Ok(Json(summary))
+}
+
+/// The client's address. Behind a trusted proxy that is the last
+/// `X-Forwarded-For` entry, the one the proxy itself appended; earlier entries
+/// come from the client and can't be trusted.
+fn client_ip(peer: SocketAddr, headers: &HeaderMap, trust_proxy: bool) -> IpAddr {
+    if trust_proxy {
+        let forwarded = headers
+            .get_all("x-forwarded-for")
+            .iter()
+            .filter_map(|v| v.to_str().ok())
+            .flat_map(|v| v.split(','))
+            .filter_map(|ip| ip.trim().parse().ok())
+            .next_back();
+        if let Some(ip) = forwarded {
+            return ip;
+        }
+    }
+    peer.ip()
 }
 
 fn validate_config(body: CreateTable) -> Result<TableConfig, String> {
@@ -151,7 +175,8 @@ async fn run_connection(socket: WebSocket, viewer: Viewer, player: String, name:
     let mut updates = table.updates.subscribe();
     let mut ping = tokio::time::interval(PING_INTERVAL);
     ping.tick().await;
-    let mut last_heard = Instant::now();
+    let mut last_heard = tokio::time::Instant::now();
+    viewer.mark_joined();
     table.lock().connect(&player, Instant::now());
     table.notify();
 
@@ -160,7 +185,7 @@ async fn run_connection(socket: WebSocket, viewer: Viewer, player: String, name:
             tokio::select! {
                 incoming = receiver.next() => match incoming {
                     Some(Ok(message)) if !matches!(message, Message::Close(_)) => {
-                        last_heard = Instant::now();
+                        last_heard = tokio::time::Instant::now();
                         let Message::Text(text) = message else { continue };
                         if let Err(message) = handle_client_message(table, &player, &name, &text) {
                             let error = ServerMsg::Error { message };
@@ -172,10 +197,8 @@ async fn run_connection(socket: WebSocket, viewer: Viewer, player: String, name:
                     }
                     _ => break,
                 },
+                _ = tokio::time::sleep_until(last_heard + CLIENT_TIMEOUT) => break,
                 _ = ping.tick() => {
-                    if last_heard.elapsed() >= CLIENT_TIMEOUT {
-                        break;
-                    }
                     if send_message(&mut sender, Message::Ping(Default::default())).await.is_err() {
                         break;
                     }
@@ -245,5 +268,35 @@ async fn send_message(sender: &mut SplitSink<WebSocket, Message>, message: Messa
     match tokio::time::timeout(SEND_TIMEOUT, sender.send(message)).await {
         Ok(Ok(())) => Ok(()),
         _ => Err(()),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn headers(values: &[&str]) -> HeaderMap {
+        let mut map = HeaderMap::new();
+        for v in values {
+            map.append("x-forwarded-for", v.parse().unwrap());
+        }
+        map
+    }
+
+    #[test]
+    fn client_ip_uses_the_peer_unless_the_proxy_is_trusted() {
+        let peer: SocketAddr = "10.0.0.1:5000".parse().unwrap();
+        let fwd = headers(&["1.1.1.1, 2.2.2.2"]);
+        assert_eq!(client_ip(peer, &fwd, false), peer.ip());
+        assert_eq!(client_ip(peer, &fwd, true), "2.2.2.2".parse::<IpAddr>().unwrap());
+    }
+
+    #[test]
+    fn client_ip_takes_the_last_forwarded_entry_across_headers() {
+        let peer: SocketAddr = "10.0.0.1:5000".parse().unwrap();
+        let fwd = headers(&["9.9.9.9", "3.3.3.3, 2001:db8::1"]);
+        assert_eq!(client_ip(peer, &fwd, true), "2001:db8::1".parse::<IpAddr>().unwrap());
+        assert_eq!(client_ip(peer, &headers(&["junk"]), true), peer.ip());
+        assert_eq!(client_ip(peer, &HeaderMap::new(), true), peer.ip());
     }
 }
