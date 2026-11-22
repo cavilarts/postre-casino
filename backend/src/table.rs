@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, VecDeque};
+use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::time::{Duration, Instant};
 
 use rand::seq::SliceRandom;
@@ -49,6 +49,9 @@ pub struct Seat {
     pub acted: bool,
     /// Stood up mid-hand; removed once the hand ends.
     pub leaving: bool,
+    /// A human with no open connection. Sits out of new hands, so their stack
+    /// keeps until they reconnect or the table closes.
+    pub away: bool,
 }
 
 impl Seat {
@@ -66,11 +69,17 @@ impl Seat {
             all_in: false,
             acted: false,
             leaving: false,
+            away: false,
         }
     }
 
     fn live(&self) -> bool {
         self.in_hand && !self.folded
+    }
+
+    /// Can be dealt into the next hand.
+    fn dealable(&self) -> bool {
+        self.stack > 0 && !self.leaving && !self.away
     }
 
     fn can_act(&self) -> bool {
@@ -113,6 +122,9 @@ pub struct Table {
     hand_id: u64,
     log: VecDeque<String>,
     chat: VecDeque<ChatMessage>,
+    /// Open connections per player id, seated or not. With none, no new hand
+    /// is dealt.
+    connections: HashMap<String, usize>,
 }
 
 impl Table {
@@ -139,6 +151,7 @@ impl Table {
             hand_id: 0,
             log: VecDeque::new(),
             chat: VecDeque::new(),
+            connections: HashMap::new(),
         }
     }
 
@@ -166,7 +179,9 @@ impl Table {
         if self.seat_of(player_id).is_some() {
             return Err("You are already seated at this table".into());
         }
-        self.seats[seat] = Some(Seat::new(player_id, name, look, self.config.buy_in));
+        let mut new_seat = Seat::new(player_id, name, look, self.config.buy_in);
+        new_seat.away = !self.connections.contains_key(player_id);
+        self.seats[seat] = Some(new_seat);
         self.push_log(format!("{name} sat down in seat {}", seat + 1));
         self.schedule_next_hand(now);
         Ok(())
@@ -205,6 +220,40 @@ impl Table {
                 self.leave_seat(idx, &name, now);
             }
         }
+    }
+
+    /// Records a new connection for `player_id`. A seated player who was away
+    /// is dealt back in.
+    pub fn connect(&mut self, player_id: &str, now: Instant) {
+        *self.connections.entry(player_id.to_string()).or_default() += 1;
+        if let Some(idx) = self.seat_of(player_id)
+            && self.seat(idx).away
+        {
+            self.seat_mut(idx).away = false;
+            let name = self.seat_name(idx);
+            self.push_log(format!("{name} is back"));
+        }
+        self.schedule_next_hand(now);
+    }
+
+    /// Records a closed connection. When a seated player's last connection
+    /// closes they sit out; when the last connection of all closes, no new
+    /// hand is dealt.
+    pub fn disconnect(&mut self, player_id: &str, now: Instant) {
+        let Some(count) = self.connections.get_mut(player_id) else { return };
+        *count -= 1;
+        if *count > 0 {
+            return;
+        }
+        self.connections.remove(player_id);
+        if let Some(idx) = self.seat_of(player_id)
+            && !self.seat(idx).leaving
+        {
+            self.seat_mut(idx).away = true;
+            let name = self.seat_name(idx);
+            self.push_log(format!("{name} is away and sits out"));
+        }
+        self.schedule_next_hand(now);
     }
 
     pub fn has_humans(&self) -> bool {
@@ -251,6 +300,14 @@ impl Table {
 
     /// Advances timers. Returns true when the state changed.
     pub fn tick(&mut self, now: Instant) -> bool {
+        // An away player can't act, so check or fold for them instead of
+        // holding up the hand for the full timer.
+        if let Some(idx) = self.to_act.filter(|&i| self.seat(i).away) {
+            let to_call = self.current_bet.saturating_sub(self.seat(idx).bet);
+            let action = if to_call == 0 { Action::Check } else { Action::Fold };
+            self.take_action(idx, action, now);
+            return true;
+        }
         if let (Some(idx), Some(due)) = (self.to_act, self.bot_due) {
             if now >= due {
                 self.bot_due = None;
@@ -300,6 +357,7 @@ impl Table {
                         folded: s.folded,
                         all_in: s.all_in,
                         leaving: s.leaving,
+                        away: s.away,
                         is_you: Some(i) == you,
                         is_button: self.button == Some(i),
                         is_turn: self.to_act == Some(i),
@@ -396,8 +454,14 @@ impl Table {
         self.seats
             .iter()
             .flatten()
-            .filter(|s| s.stack > 0 && !s.leaving)
+            .filter(|s| s.dealable())
             .count()
+    }
+
+    /// Whether a new hand can be dealt: two players can play and someone is
+    /// connected to see it.
+    fn can_deal(&self) -> bool {
+        !self.connections.is_empty() && self.eligible_count() >= 2
     }
 
     fn push_log(&mut self, msg: String) {
@@ -411,7 +475,7 @@ impl Table {
         if self.stage.is_betting() {
             return;
         }
-        if self.eligible_count() >= 2 {
+        if self.can_deal() {
             if self.next_hand_at.is_none() {
                 self.next_hand_at = Some(now + NEXT_HAND_DELAY);
             }
@@ -680,7 +744,7 @@ impl Table {
             seat.folded = false;
             seat.all_in = false;
             seat.acted = false;
-            seat.in_hand = seat.stack > 0 && !seat.leaving;
+            seat.in_hand = seat.dealable();
         }
         self.next_hand_at = None;
 
@@ -904,7 +968,9 @@ mod tests {
 
     fn sit_all(t: &mut Table, n: usize, now: Instant) {
         for i in 0..n {
-            t.sit(&format!("p{i}"), &format!("P{i}"), Look::default(), i, now).unwrap();
+            let id = format!("p{i}");
+            t.connect(&id, now);
+            t.sit(&id, &format!("P{i}"), Look::default(), i, now).unwrap();
         }
     }
 
@@ -1126,6 +1192,7 @@ mod tests {
     fn bots_play_hands_to_completion() {
         let mut now = Instant::now();
         let mut t = table(6);
+        t.connect("watcher", now);
         for _ in 0..4 {
             t.add_bot(now).unwrap();
         }
@@ -1154,5 +1221,84 @@ mod tests {
         let idx = t.to_act.unwrap();
         t.tick(now + NEXT_HAND_DELAY + ACTION_TIMEOUT + Duration::from_secs(1));
         assert!(t.seat(idx).folded);
+    }
+
+    /// Plays until the hand in progress ends, everyone checking or calling.
+    fn finish_hand(t: &mut Table, mut now: Instant) -> Instant {
+        while t.stage.is_betting() {
+            now += Duration::from_millis(250);
+            if let Some(idx) = t.to_act.filter(|&i| !t.seat(i).away) {
+                t.take_action(idx, Action::Call, now);
+            } else {
+                t.tick(now);
+            }
+        }
+        now
+    }
+
+    #[test]
+    fn away_player_sits_out_and_keeps_their_stack() {
+        let now = Instant::now();
+        let mut t = table(6);
+        sit_all(&mut t, 3, now);
+        t.disconnect("p0", now);
+        assert!(t.seat(0).away);
+        let now = now + NEXT_HAND_DELAY;
+        t.tick(now);
+        assert!(t.stage.is_betting());
+        assert!(!t.seat(0).in_hand, "an away player is not dealt in");
+        finish_hand(&mut t, now);
+        assert_eq!(t.seat(0).stack, 1000, "an away player pays no blinds");
+    }
+
+    #[test]
+    fn away_player_is_acted_for_without_waiting_for_the_timer() {
+        let now = Instant::now();
+        let mut t = table(6);
+        sit_all(&mut t, 3, now);
+        let now = now + NEXT_HAND_DELAY;
+        t.tick(now);
+        let idx = t.to_act.unwrap();
+        t.disconnect(&format!("p{idx}"), now);
+        assert!(t.tick(now + Duration::from_millis(250)));
+        assert!(t.seat(idx).folded, "facing the big blind, an away player folds");
+        assert_ne!(t.to_act, Some(idx));
+    }
+
+    #[test]
+    fn reconnecting_deals_an_away_player_back_in() {
+        let now = Instant::now();
+        let mut t = table(6);
+        sit_all(&mut t, 2, now);
+        t.connect("p0", now);
+        t.disconnect("p0", now);
+        assert!(!t.seat(0).away, "another connection is still open");
+        t.disconnect("p0", now);
+        assert!(t.seat(0).away);
+        assert!(t.next_hand_at.is_none(), "one dealable player can't start a hand");
+
+        t.connect("p0", now);
+        assert!(!t.seat(0).away);
+        t.tick(now + NEXT_HAND_DELAY);
+        assert!(t.seat(0).in_hand);
+    }
+
+    #[test]
+    fn no_hand_is_dealt_while_nobody_is_connected() {
+        let now = Instant::now();
+        let mut t = table(6);
+        t.connect("watcher", now);
+        for _ in 0..3 {
+            t.add_bot(now).unwrap();
+        }
+        assert!(t.next_hand_at.is_some());
+        t.disconnect("watcher", now);
+        assert!(t.next_hand_at.is_none());
+        t.tick(now + NEXT_HAND_DELAY);
+        assert_eq!(t.stage, Stage::Waiting);
+
+        t.connect("watcher", now);
+        t.tick(now + NEXT_HAND_DELAY * 2);
+        assert!(t.stage.is_betting());
     }
 }

@@ -152,6 +152,8 @@ async fn run_connection(socket: WebSocket, viewer: Viewer, player: String, name:
     let mut ping = tokio::time::interval(PING_INTERVAL);
     ping.tick().await;
     let mut last_heard = Instant::now();
+    table.lock().connect(&player, Instant::now());
+    table.notify();
 
     if send_state(&mut sender, table, &player).await.is_ok() {
         loop {
@@ -189,6 +191,8 @@ async fn run_connection(socket: WebSocket, viewer: Viewer, player: String, name:
             }
         }
     }
+    table.lock().disconnect(&player, Instant::now());
+    // Dropping `viewer` after this notifies the table.
 }
 
 fn handle_client_message(table: &TableHandle, player: &str, name: &str, text: &str) -> Result<(), String> {

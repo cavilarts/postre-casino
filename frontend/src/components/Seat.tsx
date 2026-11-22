@@ -69,6 +69,7 @@ function Occupied(props: {
 }) {
   const status = () => {
     if (props.seat.leaving) return "Leaving";
+    if (props.seat.away) return "Away";
     if (props.seat.allIn) return "All-in";
     if (props.seat.folded) return "Folded";
     if (props.seat.stack === 0 && !props.seat.inHand) return "Busted";
