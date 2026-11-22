@@ -26,7 +26,10 @@ export function Card(props: { code?: string; delay?: number; class?: string; boa
           shape-rendering="crispEdges"
           aria-label={props.code}
         >
-          <For each={faceLayers(props.code)}>{layer => <path d={layer.d} fill={layer.color} />}</For>
+          {/* One layer per color, so color is a stable key: changes update d in place. */}
+          <For each={faceLayers(props.code)} keyed={layer => layer.color}>
+            {layer => <path d={layer().d} fill={layer().color} />}
+          </For>
         </svg>
       ) : null}
     </span>
