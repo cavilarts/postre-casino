@@ -1,10 +1,11 @@
+use std::net::SocketAddr;
 use std::sync::Arc;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use axum::Json;
 use axum::Router;
 use axum::extract::ws::{Message, WebSocket};
-use axum::extract::{Path, Query, State, WebSocketUpgrade};
+use axum::extract::{ConnectInfo, Path, Query, State, WebSocketUpgrade};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use axum::routing::get;
@@ -13,9 +14,17 @@ use futures_util::stream::{SplitSink, StreamExt};
 use serde::{Deserialize, Serialize};
 use tokio::sync::broadcast::error::RecvError;
 
-use crate::lobby::{Lobby, LobbyFull, TableHandle, Viewer};
+use crate::lobby::{CreateError, Lobby, TableHandle, Viewer};
 use crate::protocol::{ClientMsg, Look, ServerMsg, TableSummary};
 use crate::table::TableConfig;
+
+/// How often the server pings each connection.
+const PING_INTERVAL: Duration = Duration::from_secs(20);
+/// A connection that sends nothing (not even a pong) for this long is dropped,
+/// so a dead network doesn't keep its table alive.
+const CLIENT_TIMEOUT: Duration = Duration::from_secs(45);
+/// A send that can't complete in this long means the peer is gone.
+const SEND_TIMEOUT: Duration = Duration::from_secs(10);
 
 #[derive(Clone)]
 pub struct AppState {
@@ -50,14 +59,19 @@ struct CreateTable {
 
 async fn create_table(
     State(app): State<AppState>,
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
     Json(body): Json<CreateTable>,
 ) -> Result<Json<TableSummary>, ApiError> {
     let config = validate_config(body).map_err(|msg| (StatusCode::BAD_REQUEST, msg))?;
-    let handle = app.lobby.create(config).map_err(|LobbyFull| {
-        (
+    let handle = app.lobby.create(config, addr.ip()).map_err(|err| match err {
+        CreateError::Full => (
             StatusCode::SERVICE_UNAVAILABLE,
             "Too many tables are open right now. Try again in a few minutes.".to_string(),
-        )
+        ),
+        CreateError::TooManyForClient => (
+            StatusCode::TOO_MANY_REQUESTS,
+            "You already have several tables open. Use one of those, or wait for an unused one to close.".to_string(),
+        ),
     })?;
     let summary = handle.lock().summary();
     Ok(Json(summary))
@@ -69,7 +83,7 @@ async fn get_table(
 ) -> Result<Json<TableSummary>, ApiError> {
     let handle = app
         .lobby
-        .get(&code)
+        .touch(&code)
         .ok_or((StatusCode::NOT_FOUND, "No table with that code".to_string()))?;
     let summary = handle.lock().summary();
     Ok(Json(summary))
@@ -115,14 +129,14 @@ async fn ws_upgrade(
     Path(code): Path<String>,
     Query(query): Query<WsQuery>,
 ) -> Response {
-    let Some(viewer) = app.lobby.join(&code) else {
-        return (StatusCode::NOT_FOUND, "No table with that code").into_response();
-    };
     let player = query.player.trim().to_string();
     if player.is_empty() || player.len() > 64 {
         return (StatusCode::BAD_REQUEST, "Invalid player id").into_response();
     }
     let name = clean_name(&query.name);
+    let Some(viewer) = app.lobby.join(&code) else {
+        return (StatusCode::NOT_FOUND, "No table with that code").into_response();
+    };
     ws.on_upgrade(move |socket| run_connection(socket, viewer, player, name))
 }
 
@@ -135,12 +149,17 @@ async fn run_connection(socket: WebSocket, viewer: Viewer, player: String, name:
     let table = viewer.table();
     let (mut sender, mut receiver) = socket.split();
     let mut updates = table.updates.subscribe();
+    let mut ping = tokio::time::interval(PING_INTERVAL);
+    ping.tick().await;
+    let mut last_heard = Instant::now();
 
     if send_state(&mut sender, table, &player).await.is_ok() {
         loop {
             tokio::select! {
                 incoming = receiver.next() => match incoming {
-                    Some(Ok(Message::Text(text))) => {
+                    Some(Ok(message)) if !matches!(message, Message::Close(_)) => {
+                        last_heard = Instant::now();
+                        let Message::Text(text) = message else { continue };
                         if let Err(message) = handle_client_message(table, &player, &name, &text) {
                             let error = ServerMsg::Error { message };
                             if send_json(&mut sender, &error).await.is_err() {
@@ -149,9 +168,16 @@ async fn run_connection(socket: WebSocket, viewer: Viewer, player: String, name:
                         }
                         table.notify();
                     }
-                    Some(Ok(Message::Close(_))) | None | Some(Err(_)) => break,
-                    Some(Ok(_)) => {}
+                    _ => break,
                 },
+                _ = ping.tick() => {
+                    if last_heard.elapsed() >= CLIENT_TIMEOUT {
+                        break;
+                    }
+                    if send_message(&mut sender, Message::Ping(Default::default())).await.is_err() {
+                        break;
+                    }
+                }
                 update = updates.recv() => match update {
                     Ok(()) | Err(RecvError::Lagged(_)) => {
                         if send_state(&mut sender, table, &player).await.is_err() {
@@ -208,5 +234,12 @@ async fn send_state(
 
 async fn send_json<T: Serialize>(sender: &mut SplitSink<WebSocket, Message>, value: &T) -> Result<(), ()> {
     let text = serde_json::to_string(value).map_err(|_| ())?;
-    sender.send(Message::Text(text.into())).await.map_err(|_| ())
+    send_message(sender, Message::Text(text.into())).await
+}
+
+async fn send_message(sender: &mut SplitSink<WebSocket, Message>, message: Message) -> Result<(), ()> {
+    match tokio::time::timeout(SEND_TIMEOUT, sender.send(message)).await {
+        Ok(Ok(())) => Ok(()),
+        _ => Err(()),
+    }
 }

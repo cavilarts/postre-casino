@@ -1,5 +1,5 @@
 import { createSignal, For, onSettled, Show } from "solid-js";
-import { getTable, loadIdentity, loadLook, socketUrl } from "../api";
+import { ApiError, getTable, loadIdentity, loadLook, socketUrl } from "../api";
 import { ActionBar } from "../components/ActionBar";
 import { Card } from "../components/Card";
 import { Croupier } from "../components/Croupier";
@@ -14,6 +14,8 @@ import { formatChips } from "../utils/format";
 import { TABLE_STAGE_LABELS } from "../utils/labels";
 import { tableInviteUrl } from "../utils/table";
 import { remainingFraction, secondsRemaining } from "../utils/time";
+
+const TABLE_CLOSED = "This table has closed. Tables close after sitting empty for a while.";
 
 const NOTICE = "mx-auto my-[60px] flex flex-col items-center gap-3.5 text-center text-muted";
 
@@ -96,9 +98,26 @@ export function TablePage(props: { code: string; navigate: (to: string) => void 
       ws.onclose = () => {
         setConnected(false);
         if (!disposed) {
-          retry = window.setTimeout(connect, 1500);
+          retry = window.setTimeout(reconnect, 1500);
         }
       };
+    };
+
+    // A closed socket can mean the table was removed for being idle; check
+    // before retrying so the page says so instead of reconnecting forever.
+    const reconnect = () => {
+      getTable(props.code)
+        .then(() => {
+          if (!disposed) connect();
+        })
+        .catch(error => {
+          if (disposed) return;
+          if (error instanceof ApiError && error.status === 404) {
+            setFatal(TABLE_CLOSED);
+          } else {
+            retry = window.setTimeout(reconnect, 1500);
+          }
+        });
     };
 
     getTable(props.code)
