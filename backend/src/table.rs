@@ -318,6 +318,7 @@ impl Table {
                 to_call: to_call.min(seat.stack),
                 min_raise_to: (self.current_bet + self.min_raise).min(max_raise_to),
                 max_raise_to,
+                can_raise: self.can_raise(i),
             }
         });
 
@@ -457,8 +458,9 @@ impl Table {
         let pot: u64 = self.seats.iter().flatten().map(|s| s.invested).sum();
         let roll: f64 = rng.random();
 
+        let can_raise = self.can_raise(idx);
         let raise = |fraction: f64| -> Action {
-            if min_to > max_to {
+            if !can_raise || min_to > max_to {
                 return Action::Call;
             }
             let target = (self.current_bet as f64 + (pot + to_call) as f64 * fraction).round() as u64;
@@ -499,6 +501,11 @@ impl Table {
                     return Err(format!("You must call {to_call} or fold"));
                 }
                 Ok(())
+            }
+            Action::Raise { .. } | Action::AllIn
+                if seat.bet + seat.stack > self.current_bet && !self.can_raise(idx) =>
+            {
+                Err("Betting isn't reopened: you can only call or fold".into())
             }
             Action::Raise { amount } => {
                 let max_to = seat.bet + seat.stack;
@@ -575,14 +582,17 @@ impl Table {
         self.commit(idx, delta);
 
         let size = to - prev;
-        if size >= self.min_raise {
-            self.min_raise = size;
-        }
         self.current_bet = to;
 
-        for (i, slot) in self.seats.iter_mut().enumerate() {
-            if let Some(seat) = slot {
-                if i != idx && seat.can_act() {
+        // Only a full raise reopens the betting. After an incomplete all-in raise,
+        // players who already acted may only call or fold (see `can_raise`).
+        if size >= self.min_raise {
+            self.min_raise = size;
+            for (i, slot) in self.seats.iter_mut().enumerate() {
+                if let Some(seat) = slot
+                    && i != idx
+                    && seat.can_act()
+                {
                     seat.acted = false;
                 }
             }
@@ -591,6 +601,16 @@ impl Table {
         let verb = if prev == 0 { "bets" } else { "raises to" };
         let suffix = if self.seat(idx).all_in { " (all-in)" } else { "" };
         self.push_log(format!("{name} {verb} {to}{suffix}"));
+    }
+
+    /// Whether the seat may raise. A seat that has already acted on this street
+    /// can raise again only after the bet has grown by at least a full raise since
+    /// then, either from one full raise (which clears `acted`) or from several
+    /// incomplete all-in raises that add up to one.
+    fn can_raise(&self, idx: usize) -> bool {
+        let seat = self.seat(idx);
+        let has_chips = seat.bet + seat.stack > self.current_bet;
+        has_chips && (!seat.acted || self.current_bet - seat.bet >= self.min_raise)
     }
 
     /// Seat that must act next, or None when the betting round is complete.
@@ -962,6 +982,92 @@ mod tests {
         let id = t.seat(idx).player_id.clone();
         assert!(t.act(&id, Action::Raise { amount: 15 }, now).is_err());
         assert!(t.act(&id, Action::Raise { amount: 20 }, now).is_ok());
+    }
+
+    fn actions_for(t: &Table, idx: usize, now: Instant) -> ActionsView {
+        let id = t.seat(idx).player_id.clone();
+        t.view(Some(&id), 0, now).actions.unwrap()
+    }
+
+    fn act_as(t: &mut Table, action: Action, now: Instant) -> Result<(), String> {
+        let id = t.seat(t.to_act.unwrap()).player_id.clone();
+        t.act(&id, action, now)
+    }
+
+    /// Seats 0..3 with blinds 5/10, where the first two to act raise to 100 and
+    /// call. Returns the seats of the raiser, the caller and the third player.
+    fn raise_and_call_to_100(t: &mut Table, now: Instant) -> (usize, usize, usize) {
+        sit_all(t, 3, now);
+        t.tick(now + NEXT_HAND_DELAY);
+        let a = t.to_act.unwrap();
+        act_as(t, Action::Raise { amount: 100 }, now).unwrap();
+        let b = t.to_act.unwrap();
+        act_as(t, Action::Call, now).unwrap();
+        let c = t.to_act.unwrap();
+        (a, b, c)
+    }
+
+    #[test]
+    fn incomplete_all_in_raise_does_not_reopen_betting() {
+        let now = Instant::now();
+        let mut t = table(6);
+        let (a, b, c) = raise_and_call_to_100(&mut t, now);
+        // C has 110 behind in total: an all-in 10 short of a full raise.
+        let s = t.seat_mut(c);
+        s.stack = 110 - s.bet;
+        act_as(&mut t, Action::AllIn, now).unwrap();
+        assert_eq!(t.current_bet, 110);
+        assert_eq!(t.min_raise, 90, "an incomplete raise keeps the full-raise size");
+
+        assert_eq!(t.to_act, Some(a));
+        let view = actions_for(&t, a, now);
+        assert!(!view.can_raise);
+        assert_eq!(view.to_call, 10);
+        assert!(act_as(&mut t, Action::Raise { amount: 210 }, now).is_err());
+        assert!(act_as(&mut t, Action::AllIn, now).is_err());
+        act_as(&mut t, Action::Call, now).unwrap();
+
+        assert_eq!(t.to_act, Some(b));
+        assert!(act_as(&mut t, Action::Raise { amount: 210 }, now).is_err());
+        act_as(&mut t, Action::Call, now).unwrap();
+
+        assert_eq!(t.stage, Stage::Flop, "the round closes once both have called");
+    }
+
+    #[test]
+    fn full_all_in_raise_reopens_betting() {
+        let now = Instant::now();
+        let mut t = table(6);
+        let (a, _, c) = raise_and_call_to_100(&mut t, now);
+        let s = t.seat_mut(c);
+        s.stack = 190 - s.bet;
+        act_as(&mut t, Action::AllIn, now).unwrap();
+        assert_eq!(t.to_act, Some(a));
+        assert!(actions_for(&t, a, now).can_raise);
+        act_as(&mut t, Action::Raise { amount: 280 }, now).unwrap();
+    }
+
+    #[test]
+    fn incomplete_raises_adding_up_to_a_full_raise_reopen_betting() {
+        let now = Instant::now();
+        let mut t = table(6);
+        sit_all(&mut t, 4, now);
+        t.tick(now + NEXT_HAND_DELAY);
+        let a = t.to_act.unwrap();
+        act_as(&mut t, Action::Raise { amount: 100 }, now).unwrap();
+        // The next two players each go all-in for 50 more: incomplete alone,
+        // a full 100-chip raise over A's bet together.
+        for total in [150, 200] {
+            let idx = t.to_act.unwrap();
+            let s = t.seat_mut(idx);
+            s.stack = total - s.bet;
+            act_as(&mut t, Action::AllIn, now).unwrap();
+        }
+        // The big blind hasn't acted yet, so it can raise either way.
+        assert!(actions_for(&t, t.to_act.unwrap(), now).can_raise);
+        act_as(&mut t, Action::Call, now).unwrap();
+        assert_eq!(t.to_act, Some(a));
+        assert!(actions_for(&t, a, now).can_raise);
     }
 
     #[test]

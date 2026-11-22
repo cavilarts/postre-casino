@@ -124,6 +124,8 @@ pub struct ActionsView {
     pub to_call: u64,
     pub min_raise_to: u64,
     pub max_raise_to: u64,
+    /// False when an incomplete all-in raise left betting closed to this player.
+    pub can_raise: bool,
 }
 
 #[derive(Serialize)]

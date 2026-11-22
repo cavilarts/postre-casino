@@ -27,7 +27,7 @@ const CHIP =
 export function ActionBar(props: ActionBarProps) {
   const minTo = createMemo(() => props.actions.minRaiseTo);
   const maxTo = createMemo(() => props.actions.maxRaiseTo);
-  const canRaise = () => maxTo() > props.currentBet;
+  const canRaise = () => props.actions.canRaise && maxTo() > props.currentBet;
 
   const [raiseTo, setRaiseTo] = createSignal(() => minTo());
   /** Raw text while the raise box is being edited, so clearing it doesn't write "0" back. */
