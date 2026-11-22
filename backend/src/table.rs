@@ -207,7 +207,7 @@ impl Table {
         }
     }
 
-    fn has_humans(&self) -> bool {
+    pub fn has_humans(&self) -> bool {
         self.seats.iter().flatten().any(|s| !s.player_id.starts_with("bot:"))
     }
 

@@ -13,7 +13,7 @@ use futures_util::stream::{SplitSink, StreamExt};
 use serde::{Deserialize, Serialize};
 use tokio::sync::broadcast::error::RecvError;
 
-use crate::lobby::{Lobby, TableHandle};
+use crate::lobby::{Lobby, LobbyFull, TableHandle, Viewer};
 use crate::protocol::{ClientMsg, Look, ServerMsg, TableSummary};
 use crate::table::TableConfig;
 
@@ -53,7 +53,12 @@ async fn create_table(
     Json(body): Json<CreateTable>,
 ) -> Result<Json<TableSummary>, ApiError> {
     let config = validate_config(body).map_err(|msg| (StatusCode::BAD_REQUEST, msg))?;
-    let handle = app.lobby.create(config);
+    let handle = app.lobby.create(config).map_err(|LobbyFull| {
+        (
+            StatusCode::SERVICE_UNAVAILABLE,
+            "Too many tables are open right now. Try again in a few minutes.".to_string(),
+        )
+    })?;
     let summary = handle.lock().summary();
     Ok(Json(summary))
 }
@@ -110,7 +115,7 @@ async fn ws_upgrade(
     Path(code): Path<String>,
     Query(query): Query<WsQuery>,
 ) -> Response {
-    let Some(table) = app.lobby.get(&code) else {
+    let Some(viewer) = app.lobby.join(&code) else {
         return (StatusCode::NOT_FOUND, "No table with that code").into_response();
     };
     let player = query.player.trim().to_string();
@@ -118,7 +123,7 @@ async fn ws_upgrade(
         return (StatusCode::BAD_REQUEST, "Invalid player id").into_response();
     }
     let name = clean_name(&query.name);
-    ws.on_upgrade(move |socket| run_connection(socket, table, player, name))
+    ws.on_upgrade(move |socket| run_connection(socket, viewer, player, name))
 }
 
 fn clean_name(raw: &str) -> String {
@@ -126,17 +131,17 @@ fn clean_name(raw: &str) -> String {
     if name.is_empty() { "Guest".to_string() } else { name }
 }
 
-async fn run_connection(socket: WebSocket, table: Arc<TableHandle>, player: String, name: String) {
+async fn run_connection(socket: WebSocket, viewer: Viewer, player: String, name: String) {
+    let table = viewer.table();
     let (mut sender, mut receiver) = socket.split();
     let mut updates = table.updates.subscribe();
-    table.viewer_joined();
 
-    if send_state(&mut sender, &table, &player).await.is_ok() {
+    if send_state(&mut sender, table, &player).await.is_ok() {
         loop {
             tokio::select! {
                 incoming = receiver.next() => match incoming {
                     Some(Ok(Message::Text(text))) => {
-                        if let Err(message) = handle_client_message(&table, &player, &name, &text) {
+                        if let Err(message) = handle_client_message(table, &player, &name, &text) {
                             let error = ServerMsg::Error { message };
                             if send_json(&mut sender, &error).await.is_err() {
                                 break;
@@ -149,7 +154,7 @@ async fn run_connection(socket: WebSocket, table: Arc<TableHandle>, player: Stri
                 },
                 update = updates.recv() => match update {
                     Ok(()) | Err(RecvError::Lagged(_)) => {
-                        if send_state(&mut sender, &table, &player).await.is_err() {
+                        if send_state(&mut sender, table, &player).await.is_err() {
                             break;
                         }
                     }
@@ -158,8 +163,6 @@ async fn run_connection(socket: WebSocket, table: Arc<TableHandle>, player: Stri
             }
         }
     }
-
-    table.viewer_left();
 }
 
 fn handle_client_message(table: &TableHandle, player: &str, name: &str, text: &str) -> Result<(), String> {
