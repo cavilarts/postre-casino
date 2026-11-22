@@ -36,6 +36,8 @@ export interface ActionsView {
   toCall: number;
   minRaiseTo: number;
   maxRaiseTo: number;
+  /** False when an incomplete all-in raise left betting closed to this player. */
+  canRaise: boolean;
 }
 
 export interface Award {
