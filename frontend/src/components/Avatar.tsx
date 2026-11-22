@@ -12,7 +12,10 @@ export function Avatar(props: { look: Look; size: number; class?: string }) {
       role="img"
       aria-label="Character"
     >
-      <For each={composeAvatar(props.look)}>{layer => <path d={layer.d} fill={layer.color} />}</For>
+      {/* One layer per color, so color is a stable key: changes update d in place. */}
+      <For each={composeAvatar(props.look)} keyed={layer => layer.color}>
+        {layer => <path d={layer().d} fill={layer().color} />}
+      </For>
     </svg>
   );
 }

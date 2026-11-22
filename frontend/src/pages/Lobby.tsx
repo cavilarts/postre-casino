@@ -1,6 +1,7 @@
 import { createSignal, createStore, For, onSettled, Show } from "solid-js";
 import { createTable, listTables, loadIdentity, loadLook, saveLook, saveName } from "../api";
 import { AvatarCreator } from "../components/AvatarCreator";
+import { Logo } from "../components/Logo";
 import { NumberField } from "../components/NumberField";
 import type { TableSummary } from "../types";
 import { BTN_PRIMARY, BTN_SMALL, INPUT, PANEL } from "../ui";
@@ -93,12 +94,10 @@ export function Lobby(props: { navigate: (to: string) => void }) {
   return (
     <div class="mx-auto max-w-[1180px] px-5 pt-7 pb-[60px]">
       <header class="mb-[26px] flex flex-wrap items-center justify-between gap-4">
-        <div class="flex items-center gap-4">
-          <span class="grid size-14 place-items-center border-4 border-wood-dark bg-gold font-display text-[22px] text-wood-dark shadow-pixel">
-            ♠
-          </span>
+        <div class="flex items-center gap-4 max-sm:flex-col max-sm:items-start max-sm:gap-3">
+          <Logo height={45} class="block shrink-0 shadow-pixel" decorative />
           <div>
-            <h1 class="text-xl text-cream">Felt &amp; Friends</h1>
+            <h1 class="text-xl text-cream">Postre Poker</h1>
             <p class="mt-2 text-[22px] text-muted">Texas Hold'em with your crew</p>
           </div>
         </div>
