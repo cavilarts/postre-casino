@@ -18,6 +18,9 @@ const LOG_CAP: usize = 80;
 pub const AWAY_GRACE: Duration = Duration::from_secs(10);
 /// A player away this long gives up their seat.
 pub const AWAY_SEAT_TIMEOUT: Duration = Duration::from_secs(15 * 60);
+/// A connected player who lets the timer run out this many turns in a row
+/// sits out until they sit back in, so an idle tab doesn't stall every hand.
+pub const IDLE_TIMEOUTS: u8 = 2;
 const CHAT_CAP: usize = 100;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
@@ -58,6 +61,13 @@ pub struct Seat {
     /// `AWAY_GRACE` they sit out of new hands, so their stack keeps until they
     /// reconnect, the table closes, or `AWAY_SEAT_TIMEOUT` frees the seat.
     pub away_since: Option<Instant>,
+    /// Consecutive turns the timer ran out on. Reset by any action they take.
+    pub timeouts: u8,
+    /// When they started sitting out after `IDLE_TIMEOUTS` timeouts. Like an
+    /// away player they keep their stack but aren't dealt in, until they sit
+    /// back in or `AWAY_SEAT_TIMEOUT` frees the seat. Reconnecting doesn't
+    /// count: the client reconnects on its own.
+    pub sitting_out_since: Option<Instant>,
 }
 
 impl Seat {
@@ -76,6 +86,8 @@ impl Seat {
             acted: false,
             leaving: false,
             away_since: None,
+            timeouts: 0,
+            sitting_out_since: None,
         }
     }
 
@@ -85,7 +97,20 @@ impl Seat {
 
     /// Can be dealt into the next hand.
     fn dealable(&self, now: Instant) -> bool {
-        self.stack > 0 && !self.leaving && !self.is_away(now)
+        self.stack > 0 && !self.leaving && !self.is_absent(now)
+    }
+
+    /// Away, or sitting out after idling: either way nobody will act for them.
+    fn is_absent(&self, now: Instant) -> bool {
+        self.is_away(now) || self.sitting_out_since.is_some()
+    }
+
+    /// Away or sitting out for long enough to lose the seat.
+    fn absent_too_long(&self, now: Instant) -> bool {
+        [self.away_since, self.sitting_out_since]
+            .into_iter()
+            .flatten()
+            .any(|since| now.duration_since(since) >= AWAY_SEAT_TIMEOUT)
     }
 
     /// Disconnected for longer than the grace period.
@@ -208,6 +233,19 @@ impl Table {
         Ok(())
     }
 
+    /// Deals a player who sat out after idling back into the next hand.
+    pub fn sit_in(&mut self, player_id: &str, now: Instant) -> Result<(), String> {
+        let idx = self.seat_of(player_id).ok_or("You are not seated")?;
+        let seat = self.seat_mut(idx);
+        seat.timeouts = 0;
+        if seat.sitting_out_since.take().is_some() {
+            let name = self.seat_name(idx);
+            self.push_log(format!("{name} is back"));
+            self.schedule_next_hand(now);
+        }
+        Ok(())
+    }
+
     pub fn add_bot(&mut self, now: Instant) -> Result<(), String> {
         let seat = self.seats.iter().position(|s| s.is_none()).ok_or("The table is full")?;
         let bots = self.seats.iter().flatten().filter(|s| s.player_id.starts_with("bot:")).count();
@@ -294,6 +332,7 @@ impl Table {
             return Err("It's not your turn".into());
         }
         self.validate(idx, action)?;
+        self.seat_mut(idx).timeouts = 0;
         self.take_action(idx, action, now);
         Ok(())
     }
@@ -310,13 +349,11 @@ impl Table {
 
     /// Advances timers. Returns true when the state changed.
     pub fn tick(&mut self, now: Instant) -> bool {
-        // An away player can't act, so check or fold for them instead of
-        // holding up the hand for the full timer.
         let expired: Vec<String> = self
             .seats
             .iter()
             .flatten()
-            .filter(|s| s.away_since.is_some_and(|since| now.duration_since(since) >= AWAY_SEAT_TIMEOUT))
+            .filter(|s| s.absent_too_long(now))
             .map(|s| s.player_id.clone())
             .collect();
         if !expired.is_empty() {
@@ -325,7 +362,9 @@ impl Table {
             }
             return true;
         }
-        if let Some(idx) = self.to_act.filter(|&i| self.seat(i).is_away(now)) {
+        // An absent player can't act, so check or fold for them instead of
+        // holding up the hand for the full timer.
+        if let Some(idx) = self.to_act.filter(|&i| self.seat(i).is_absent(now)) {
             let to_call = self.current_bet.saturating_sub(self.seat(idx).bet);
             let action = if to_call == 0 { Action::Check } else { Action::Fold };
             self.take_action(idx, action, now);
@@ -344,6 +383,12 @@ impl Table {
                 let name = self.seat_name(idx);
                 let to_call = self.current_bet.saturating_sub(self.seat(idx).bet);
                 self.push_log(format!("{name} ran out of time"));
+                let seat = self.seat_mut(idx);
+                seat.timeouts = seat.timeouts.saturating_add(1);
+                if seat.timeouts >= IDLE_TIMEOUTS && seat.sitting_out_since.is_none() {
+                    seat.sitting_out_since = Some(now);
+                    self.push_log(format!("{name} is sitting out"));
+                }
                 let action = if to_call == 0 { Action::Check } else { Action::Fold };
                 self.take_action(idx, action, now);
                 return true;
@@ -381,6 +426,7 @@ impl Table {
                         all_in: s.all_in,
                         leaving: s.leaving,
                         away: s.is_away(now),
+                        sitting_out: s.sitting_out_since.is_some(),
                         is_you: Some(i) == you,
                         is_button: self.button == Some(i),
                         is_turn: self.to_act == Some(i),
@@ -1251,7 +1297,7 @@ mod tests {
     fn finish_hand(t: &mut Table, mut now: Instant) -> Instant {
         while t.stage.is_betting() {
             now += Duration::from_millis(250);
-            if let Some(idx) = t.to_act.filter(|&i| t.seat(i).away_since.is_none()) {
+            if let Some(idx) = t.to_act.filter(|&i| t.seat(i).away_since.is_none() && t.seat(i).sitting_out_since.is_none()) {
                 t.take_action(idx, Action::Call, now);
             } else {
                 t.tick(now);
@@ -1358,5 +1404,118 @@ mod tests {
         t.connect("watcher", now);
         t.tick(now + NEXT_HAND_DELAY * 2);
         assert!(t.stage.is_betting());
+    }
+
+    /// Plays the hand in progress to the end, letting the timer run out
+    /// whenever it's `idle`'s turn and calling for everyone else.
+    fn finish_hand_idling(t: &mut Table, idle: usize, mut now: Instant) -> Instant {
+        while t.stage.is_betting() {
+            match t.to_act {
+                Some(idx) if idx == idle && t.seat(idx).sitting_out_since.is_none() => {
+                    now = t.deadline.unwrap();
+                    t.tick(now);
+                }
+                Some(idx) if idx != idle => {
+                    now += Duration::from_millis(250);
+                    t.take_action(idx, Action::Call, now);
+                }
+                _ => {
+                    now += Duration::from_millis(250);
+                    t.tick(now);
+                }
+            }
+        }
+        now
+    }
+
+    /// Deals the next hand.
+    fn deal(t: &mut Table, now: Instant) -> Instant {
+        let now = now + NEXT_HAND_DELAY;
+        t.tick(now);
+        assert!(t.stage.is_betting());
+        now
+    }
+
+    #[test]
+    fn an_idle_player_sits_out_after_repeated_timeouts() {
+        let now = Instant::now();
+        let mut t = table(6);
+        sit_all(&mut t, 3, now);
+        let mut now = now;
+        while t.seat(0).sitting_out_since.is_none() {
+            now = deal(&mut t, now);
+            now = finish_hand_idling(&mut t, 0, now);
+        }
+        assert_eq!(t.seat(0).timeouts, IDLE_TIMEOUTS);
+
+        let stack = t.seat(0).stack;
+        now = deal(&mut t, now);
+        assert!(!t.seat(0).in_hand, "a player sitting out is not dealt in");
+        finish_hand(&mut t, now);
+        assert_eq!(t.seat(0).stack, stack, "a player sitting out pays no blinds");
+    }
+
+    #[test]
+    fn acting_resets_the_timeout_count() {
+        let now = Instant::now();
+        let mut t = table(2);
+        sit_all(&mut t, 2, now);
+        let mut now = now;
+        // Time out every other hand, acting in the hands between.
+        for hand in 0..2 * IDLE_TIMEOUTS {
+            now = deal(&mut t, now);
+            if hand % 2 == 0 {
+                now = finish_hand_idling(&mut t, 0, now);
+            } else {
+                while t.stage.is_betting() {
+                    let idx = t.to_act.unwrap();
+                    now += Duration::from_millis(250);
+                    let action = if t.current_bet > t.seat(idx).bet { Action::Call } else { Action::Check };
+                    t.act(&format!("p{idx}"), action, now).unwrap();
+                }
+            }
+            assert!(t.seat(0).sitting_out_since.is_none(), "timeouts between actions don't add up");
+        }
+    }
+
+    #[test]
+    fn sitting_in_deals_an_idle_player_back_in_but_reconnecting_does_not() {
+        let now = Instant::now();
+        let mut t = table(2);
+        sit_all(&mut t, 2, now);
+        let mut now = now;
+        while t.seat(0).sitting_out_since.is_none() {
+            now = deal(&mut t, now);
+            now = finish_hand_idling(&mut t, 0, now);
+        }
+        now += NEXT_HAND_DELAY;
+        t.tick(now);
+        assert_eq!(t.stage, Stage::Showdown, "one player left can't start a hand");
+
+        t.disconnect("p0", now);
+        t.connect("p0", now);
+        t.tick(now + NEXT_HAND_DELAY);
+        assert!(!t.stage.is_betting(), "the client reconnecting on its own isn't coming back");
+
+        t.sit_in("p0", now).unwrap();
+        assert_eq!(t.seat(0).timeouts, 0);
+        deal(&mut t, now);
+        assert!(t.seat(0).in_hand);
+    }
+
+    #[test]
+    fn sitting_out_too_long_frees_the_seat() {
+        let now = Instant::now();
+        let mut t = table(6);
+        sit_all(&mut t, 3, now);
+        let mut now = now;
+        while t.seat(0).sitting_out_since.is_none() {
+            now = deal(&mut t, now);
+            now = finish_hand_idling(&mut t, 0, now);
+        }
+        let since = t.seat(0).sitting_out_since.unwrap();
+        let later = finish_hand(&mut t, since + AWAY_SEAT_TIMEOUT);
+        t.tick(later);
+        assert!(t.seats[0].is_none(), "the seat opens for someone else");
     }
 }

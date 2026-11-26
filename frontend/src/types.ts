@@ -26,6 +26,8 @@ export interface SeatView {
   allIn: boolean;
   leaving: boolean;
   away: boolean;
+  /** Let the timer run out too often; not dealt in until they sit back in. */
+  sittingOut: boolean;
   isYou: boolean;
   isButton: boolean;
   isTurn: boolean;
@@ -82,6 +84,7 @@ export type Action =
 export type ClientMessage =
   | { type: "sit"; seat: number; look: Look }
   | { type: "stand" }
+  | { type: "sitIn" }
   | { type: "addBot" }
   | { type: "removeBots" }
   | { type: "act"; action: Action }

@@ -168,6 +168,7 @@ export function TablePage(props: { code: string; navigate: (to: string) => void 
     const v = view();
     if (!v) return "Welcome in!";
     if (v.you !== null && v.toAct === v.you) return "Your move!";
+    if (v.you !== null && v.seats[v.you]?.sittingOut) return "You're sitting out. Sit back in to play.";
     if (v.toAct !== null && v.seats[v.toAct]) return `${v.seats[v.toAct]!.name}, your action.`;
     switch (v.stage) {
       case "waiting":
@@ -213,6 +214,9 @@ export function TablePage(props: { code: string; navigate: (to: string) => void 
       { label: copied() ? "Link copied" : "Invite friends", run: copyInvite, title: inviteUrl() } as TableAction,
       ...(v ? [{ label: "+ Bot", run: () => send({ type: "addBot" }) }] : []),
       ...(v?.seats.some(s => s?.isBot) ? [{ label: "Remove bots", run: () => send({ type: "removeBots" }) }] : []),
+      ...(v && v.you !== null && v.seats[v.you]?.sittingOut
+        ? [{ label: "Sit back in", run: () => send({ type: "sitIn" }) }]
+        : []),
       ...(v && v.you !== null ? [{ label: "Stand up", run: () => send({ type: "stand" }) }] : []),
     ];
   };
