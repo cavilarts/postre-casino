@@ -234,8 +234,17 @@ impl Table {
     }
 
     /// Deals a player who sat out after idling back into the next hand.
+    /// Refused otherwise, so it can't be used to reset the timeout count.
     pub fn sit_in(&mut self, player_id: &str, now: Instant) -> Result<(), String> {
         let idx = self.seat_of(player_id).ok_or("You are not seated")?;
+        if self.seat(idx).sitting_out_since.is_none() {
+            return Err("You are not sitting out".into());
+        }
+        self.end_sit_out(idx, now);
+        Ok(())
+    }
+
+    fn end_sit_out(&mut self, idx: usize, now: Instant) {
         let seat = self.seat_mut(idx);
         seat.timeouts = 0;
         if seat.sitting_out_since.take().is_some() {
@@ -243,7 +252,6 @@ impl Table {
             self.push_log(format!("{name} is back"));
             self.schedule_next_hand(now);
         }
-        Ok(())
     }
 
     pub fn add_bot(&mut self, now: Instant) -> Result<(), String> {
@@ -278,7 +286,7 @@ impl Table {
         if let Some(idx) = self.seat_of(player_id) {
             let was_away = self.seat(idx).is_away(now);
             self.seat_mut(idx).away_since = None;
-            if was_away {
+            if was_away && self.seat(idx).sitting_out_since.is_none() {
                 let name = self.seat_name(idx);
                 self.push_log(format!("{name} is back"));
             }
@@ -332,7 +340,9 @@ impl Table {
             return Err("It's not your turn".into());
         }
         self.validate(idx, action)?;
-        self.seat_mut(idx).timeouts = 0;
+        // Someone who sat out mid-hand and acts when it comes back to them
+        // is clearly back.
+        self.end_sit_out(idx, now);
         self.take_action(idx, action, now);
         Ok(())
     }
@@ -384,7 +394,11 @@ impl Table {
                 let to_call = self.current_bet.saturating_sub(self.seat(idx).bet);
                 self.push_log(format!("{name} ran out of time"));
                 let seat = self.seat_mut(idx);
-                seat.timeouts = seat.timeouts.saturating_add(1);
+                // A connection that dropped this turn is a network blip, not
+                // idling; `AWAY_GRACE` and `AWAY_SEAT_TIMEOUT` handle it.
+                if seat.away_since.is_none() {
+                    seat.timeouts = seat.timeouts.saturating_add(1);
+                }
                 if seat.timeouts >= IDLE_TIMEOUTS && seat.sitting_out_since.is_none() {
                     seat.sitting_out_since = Some(now);
                     self.push_log(format!("{name} is sitting out"));
@@ -1517,5 +1531,71 @@ mod tests {
         let later = finish_hand(&mut t, since + AWAY_SEAT_TIMEOUT);
         t.tick(later);
         assert!(t.seats[0].is_none(), "the seat opens for someone else");
+    }
+
+    /// Deals a hand and has everyone else call until it's `idx`'s turn.
+    fn deal_until_turn(t: &mut Table, idx: usize, mut now: Instant) -> Instant {
+        now = deal(t, now);
+        while let Some(other) = t.to_act.filter(|&i| i != idx) {
+            now += Duration::from_millis(250);
+            t.take_action(other, Action::Call, now);
+        }
+        assert_eq!(t.to_act, Some(idx));
+        now
+    }
+
+    #[test]
+    fn sit_in_is_refused_unless_sitting_out() {
+        let now = Instant::now();
+        let mut t = table(6);
+        sit_all(&mut t, 3, now);
+        let mut now = now;
+        for _ in 0..IDLE_TIMEOUTS {
+            assert!(t.sit_in("p0", now).is_err(), "sitIn can't reset the timeout count");
+            now = deal(&mut t, now);
+            now = finish_hand_idling(&mut t, 0, now);
+        }
+        assert!(t.seat(0).sitting_out_since.is_some());
+        assert!(t.sit_in("p0", now).is_ok());
+    }
+
+    #[test]
+    fn a_timeout_after_a_dropped_connection_is_not_idling() {
+        let now = Instant::now();
+        let mut t = table(6);
+        sit_all(&mut t, 3, now);
+        let now = deal_until_turn(&mut t, 0, now);
+        let deadline = t.deadline.unwrap();
+        t.disconnect("p0", deadline - Duration::from_secs(1));
+        t.tick(deadline);
+        assert_eq!(t.seat(0).timeouts, 0, "a network blip doesn't count toward sitting out");
+        t.connect("p0", now);
+    }
+
+    #[test]
+    fn acting_while_sitting_out_mid_hand_sits_back_in() {
+        let now = Instant::now();
+        let mut t = table(6);
+        sit_all(&mut t, 3, now);
+        let now = deal_until_turn(&mut t, 0, now);
+        t.seat_mut(0).timeouts = IDLE_TIMEOUTS;
+        t.seat_mut(0).sitting_out_since = Some(now);
+        t.act("p0", Action::Call, now).unwrap();
+        assert!(t.seat(0).sitting_out_since.is_none());
+        assert_eq!(t.seat(0).timeouts, 0);
+        let now = finish_hand(&mut t, now);
+        deal(&mut t, now);
+        assert!(t.seat(0).in_hand);
+    }
+
+    #[test]
+    fn reconnecting_while_sitting_out_does_not_say_back() {
+        let now = Instant::now();
+        let mut t = table(6);
+        sit_all(&mut t, 3, now);
+        t.seat_mut(0).sitting_out_since = Some(now);
+        t.disconnect("p0", now);
+        t.connect("p0", now + AWAY_GRACE);
+        assert!(!t.log.iter().any(|line| line.ends_with("is back")));
     }
 }
