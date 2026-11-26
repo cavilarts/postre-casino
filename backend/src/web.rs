@@ -231,6 +231,7 @@ fn handle_client_message(table: &TableHandle, player: &str, name: &str, text: &s
             t.sit(player, name, look, seat, now)
         }
         ClientMsg::Stand => t.stand(player, now),
+        ClientMsg::SitIn => t.sit_in(player, now),
         ClientMsg::AddBot => t.add_bot(now),
         ClientMsg::RemoveBots => {
             t.remove_bots(now);

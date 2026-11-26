@@ -56,6 +56,8 @@ pub enum ClientMsg {
         look: Option<Look>,
     },
     Stand,
+    /// Come back after sitting out for letting the timer run out.
+    SitIn,
     AddBot,
     RemoveBots,
     Act { action: Action },
@@ -112,6 +114,7 @@ pub struct SeatView {
     pub all_in: bool,
     pub leaving: bool,
     pub away: bool,
+    pub sitting_out: bool,
     pub is_you: bool,
     pub is_button: bool,
     pub is_turn: bool,

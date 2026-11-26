@@ -168,6 +168,7 @@ export function TablePage(props: { code: string; navigate: (to: string) => void 
     const v = view();
     if (!v) return "Welcome in!";
     if (v.you !== null && v.toAct === v.you) return "Your move!";
+    if (v.you !== null && v.seats[v.you]?.sittingOut) return "You're sitting out. Come back when you're ready.";
     if (v.toAct !== null && v.seats[v.toAct]) return `${v.seats[v.toAct]!.name}, your action.`;
     switch (v.stage) {
       case "waiting":
@@ -421,6 +422,13 @@ export function TablePage(props: { code: string; navigate: (to: string) => void 
                 handName={view()!.yourHand}
                 onAct={act}
               />
+            ) : view()!.you !== null && view()!.seats[view()!.you!]?.sittingOut ? (
+              <div class="flex items-center justify-center gap-3 p-1.5 text-center text-2xl text-cream [text-shadow:2px_2px_0_var(--color-wood-dark)] max-sm:flex-col max-sm:gap-1.5 lg:p-0.5 lg:text-[22px]">
+                <span>You're sitting out after missing your turn.</span>
+                <button class={BTN} onClick={() => send({ type: "sitIn" })}>
+                  Sit back in
+                </button>
+              </div>
             ) : (
               <div class="p-1.5 text-center text-2xl text-cream [text-shadow:2px_2px_0_var(--color-wood-dark)] lg:p-0.5 lg:text-[22px]">
                 {view()!.you === null
