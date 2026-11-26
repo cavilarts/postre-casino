@@ -111,6 +111,7 @@ pub struct SeatView {
     pub folded: bool,
     pub all_in: bool,
     pub leaving: bool,
+    pub away: bool,
     pub is_you: bool,
     pub is_button: bool,
     pub is_turn: bool,

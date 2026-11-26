@@ -4,6 +4,7 @@ mod protocol;
 mod table;
 mod web;
 
+use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -29,6 +30,7 @@ async fn main() {
 
     let state = AppState {
         lobby: Arc::new(Lobby::default()),
+        trust_proxy: std::env::var("TRUST_PROXY").is_ok_and(|v| v == "1" || v.eq_ignore_ascii_case("true")),
     };
 
     let app = web::router(state)
@@ -40,5 +42,7 @@ async fn main() {
         .await
         .expect("failed to bind port");
     tracing::info!("poker server listening on http://localhost:{port}");
-    axum::serve(listener, app).await.expect("server error");
+    axum::serve(listener, app.into_make_service_with_connect_info::<SocketAddr>())
+        .await
+        .expect("server error");
 }

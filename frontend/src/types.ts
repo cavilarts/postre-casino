@@ -25,6 +25,7 @@ export interface SeatView {
   folded: boolean;
   allIn: boolean;
   leaving: boolean;
+  away: boolean;
   isYou: boolean;
   isButton: boolean;
   isTurn: boolean;

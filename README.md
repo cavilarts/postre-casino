@@ -72,6 +72,7 @@ Environment variables:
 | `PORT`       | `3000`                        | HTTP port                     |
 | `STATIC_DIR` | `../frontend/dist`            | Built frontend to serve       |
 | `RUST_LOG`   | `poker_server=info,...`       | Log filter                    |
+| `TRUST_PROXY` | unset                        | Set to `1` behind a reverse proxy so per-client limits use `X-Forwarded-For` |
 
 ## Tests
 

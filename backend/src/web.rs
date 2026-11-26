@@ -1,11 +1,12 @@
+use std::net::{IpAddr, SocketAddr};
 use std::sync::Arc;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use axum::Json;
 use axum::Router;
 use axum::extract::ws::{Message, WebSocket};
-use axum::extract::{Path, Query, State, WebSocketUpgrade};
-use axum::http::StatusCode;
+use axum::extract::{ConnectInfo, Path, Query, State, WebSocketUpgrade};
+use axum::http::{HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::routing::get;
 use futures_util::sink::SinkExt;
@@ -13,13 +14,24 @@ use futures_util::stream::{SplitSink, StreamExt};
 use serde::{Deserialize, Serialize};
 use tokio::sync::broadcast::error::RecvError;
 
-use crate::lobby::{Lobby, TableHandle};
+use crate::lobby::{CreateError, Lobby, TableHandle, Viewer};
 use crate::protocol::{ClientMsg, Look, ServerMsg, TableSummary};
 use crate::table::TableConfig;
+
+/// How often the server pings each connection.
+const PING_INTERVAL: Duration = Duration::from_secs(20);
+/// A connection that sends nothing (not even a pong) for this long is dropped,
+/// so a dead network doesn't keep its table alive.
+const CLIENT_TIMEOUT: Duration = Duration::from_secs(45);
+/// A send that can't complete in this long means the peer is gone.
+const SEND_TIMEOUT: Duration = Duration::from_secs(10);
 
 #[derive(Clone)]
 pub struct AppState {
     pub lobby: Arc<Lobby>,
+    /// Take the client address from `X-Forwarded-For` (set when running behind
+    /// a reverse proxy) instead of the TCP peer.
+    pub trust_proxy: bool,
 }
 
 pub fn router(state: AppState) -> Router {
@@ -50,10 +62,22 @@ struct CreateTable {
 
 async fn create_table(
     State(app): State<AppState>,
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
     Json(body): Json<CreateTable>,
 ) -> Result<Json<TableSummary>, ApiError> {
     let config = validate_config(body).map_err(|msg| (StatusCode::BAD_REQUEST, msg))?;
-    let handle = app.lobby.create(config);
+    let client = client_ip(addr, &headers, app.trust_proxy);
+    let handle = app.lobby.create(config, client).map_err(|err| match err {
+        CreateError::Full => (
+            StatusCode::SERVICE_UNAVAILABLE,
+            "Too many tables are open right now. Try again in a few minutes.".to_string(),
+        ),
+        CreateError::TooManyForClient => (
+            StatusCode::TOO_MANY_REQUESTS,
+            "You already have several tables open. Use one of those, or wait for an unused one to close.".to_string(),
+        ),
+    })?;
     let summary = handle.lock().summary();
     Ok(Json(summary))
 }
@@ -64,10 +88,29 @@ async fn get_table(
 ) -> Result<Json<TableSummary>, ApiError> {
     let handle = app
         .lobby
-        .get(&code)
+        .touch(&code)
         .ok_or((StatusCode::NOT_FOUND, "No table with that code".to_string()))?;
     let summary = handle.lock().summary();
     Ok(Json(summary))
+}
+
+/// The client's address. Behind a trusted proxy that is the last
+/// `X-Forwarded-For` entry, the one the proxy itself appended; earlier entries
+/// come from the client and can't be trusted.
+fn client_ip(peer: SocketAddr, headers: &HeaderMap, trust_proxy: bool) -> IpAddr {
+    if trust_proxy {
+        let forwarded = headers
+            .get_all("x-forwarded-for")
+            .iter()
+            .filter_map(|v| v.to_str().ok())
+            .flat_map(|v| v.split(','))
+            .filter_map(|ip| ip.trim().parse().ok())
+            .next_back();
+        if let Some(ip) = forwarded {
+            return ip;
+        }
+    }
+    peer.ip()
 }
 
 fn validate_config(body: CreateTable) -> Result<TableConfig, String> {
@@ -110,15 +153,15 @@ async fn ws_upgrade(
     Path(code): Path<String>,
     Query(query): Query<WsQuery>,
 ) -> Response {
-    let Some(table) = app.lobby.get(&code) else {
-        return (StatusCode::NOT_FOUND, "No table with that code").into_response();
-    };
     let player = query.player.trim().to_string();
     if player.is_empty() || player.len() > 64 {
         return (StatusCode::BAD_REQUEST, "Invalid player id").into_response();
     }
     let name = clean_name(&query.name);
-    ws.on_upgrade(move |socket| run_connection(socket, table, player, name))
+    let Some(viewer) = app.lobby.join(&code) else {
+        return (StatusCode::NOT_FOUND, "No table with that code").into_response();
+    };
+    ws.on_upgrade(move |socket| run_connection(socket, viewer, player, name))
 }
 
 fn clean_name(raw: &str) -> String {
@@ -126,17 +169,25 @@ fn clean_name(raw: &str) -> String {
     if name.is_empty() { "Guest".to_string() } else { name }
 }
 
-async fn run_connection(socket: WebSocket, table: Arc<TableHandle>, player: String, name: String) {
+async fn run_connection(socket: WebSocket, viewer: Viewer, player: String, name: String) {
+    let table = viewer.table();
     let (mut sender, mut receiver) = socket.split();
     let mut updates = table.updates.subscribe();
-    table.viewer_joined();
+    let mut ping = tokio::time::interval(PING_INTERVAL);
+    ping.tick().await;
+    let mut last_heard = tokio::time::Instant::now();
+    viewer.mark_joined();
+    table.lock().connect(&player, Instant::now());
+    table.notify();
 
-    if send_state(&mut sender, &table, &player).await.is_ok() {
+    if send_state(&mut sender, table, &player).await.is_ok() {
         loop {
             tokio::select! {
                 incoming = receiver.next() => match incoming {
-                    Some(Ok(Message::Text(text))) => {
-                        if let Err(message) = handle_client_message(&table, &player, &name, &text) {
+                    Some(Ok(message)) if !matches!(message, Message::Close(_)) => {
+                        last_heard = tokio::time::Instant::now();
+                        let Message::Text(text) = message else { continue };
+                        if let Err(message) = handle_client_message(table, &player, &name, &text) {
                             let error = ServerMsg::Error { message };
                             if send_json(&mut sender, &error).await.is_err() {
                                 break;
@@ -144,12 +195,17 @@ async fn run_connection(socket: WebSocket, table: Arc<TableHandle>, player: Stri
                         }
                         table.notify();
                     }
-                    Some(Ok(Message::Close(_))) | None | Some(Err(_)) => break,
-                    Some(Ok(_)) => {}
+                    _ => break,
                 },
+                _ = tokio::time::sleep_until(last_heard + CLIENT_TIMEOUT) => break,
+                _ = ping.tick() => {
+                    if send_message(&mut sender, Message::Ping(Default::default())).await.is_err() {
+                        break;
+                    }
+                }
                 update = updates.recv() => match update {
                     Ok(()) | Err(RecvError::Lagged(_)) => {
-                        if send_state(&mut sender, &table, &player).await.is_err() {
+                        if send_state(&mut sender, table, &player).await.is_err() {
                             break;
                         }
                     }
@@ -158,8 +214,8 @@ async fn run_connection(socket: WebSocket, table: Arc<TableHandle>, player: Stri
             }
         }
     }
-
-    table.viewer_left();
+    table.lock().disconnect(&player, Instant::now());
+    // Dropping `viewer` after this notifies the table.
 }
 
 fn handle_client_message(table: &TableHandle, player: &str, name: &str, text: &str) -> Result<(), String> {
@@ -205,5 +261,42 @@ async fn send_state(
 
 async fn send_json<T: Serialize>(sender: &mut SplitSink<WebSocket, Message>, value: &T) -> Result<(), ()> {
     let text = serde_json::to_string(value).map_err(|_| ())?;
-    sender.send(Message::Text(text.into())).await.map_err(|_| ())
+    send_message(sender, Message::Text(text.into())).await
+}
+
+async fn send_message(sender: &mut SplitSink<WebSocket, Message>, message: Message) -> Result<(), ()> {
+    match tokio::time::timeout(SEND_TIMEOUT, sender.send(message)).await {
+        Ok(Ok(())) => Ok(()),
+        _ => Err(()),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn headers(values: &[&str]) -> HeaderMap {
+        let mut map = HeaderMap::new();
+        for v in values {
+            map.append("x-forwarded-for", v.parse().unwrap());
+        }
+        map
+    }
+
+    #[test]
+    fn client_ip_uses_the_peer_unless_the_proxy_is_trusted() {
+        let peer: SocketAddr = "10.0.0.1:5000".parse().unwrap();
+        let fwd = headers(&["1.1.1.1, 2.2.2.2"]);
+        assert_eq!(client_ip(peer, &fwd, false), peer.ip());
+        assert_eq!(client_ip(peer, &fwd, true), "2.2.2.2".parse::<IpAddr>().unwrap());
+    }
+
+    #[test]
+    fn client_ip_takes_the_last_forwarded_entry_across_headers() {
+        let peer: SocketAddr = "10.0.0.1:5000".parse().unwrap();
+        let fwd = headers(&["9.9.9.9", "3.3.3.3, 2001:db8::1"]);
+        assert_eq!(client_ip(peer, &fwd, true), "2001:db8::1".parse::<IpAddr>().unwrap());
+        assert_eq!(client_ip(peer, &headers(&["junk"]), true), peer.ip());
+        assert_eq!(client_ip(peer, &HeaderMap::new(), true), peer.ip());
+    }
 }

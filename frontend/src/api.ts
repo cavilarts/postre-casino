@@ -38,10 +38,20 @@ export interface NewTable {
   private: boolean;
 }
 
+/** A request the server answered with an error status. */
+export class ApiError extends Error {
+  constructor(
+    message: string,
+    readonly status: number,
+  ) {
+    super(message);
+  }
+}
+
 async function readJson<T>(response: Response): Promise<T> {
   if (!response.ok) {
     const text = await response.text();
-    throw new Error(text || `Request failed (${response.status})`);
+    throw new ApiError(text || `Request failed (${response.status})`, response.status);
   }
   return (await response.json()) as T;
 }
