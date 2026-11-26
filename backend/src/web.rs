@@ -121,7 +121,10 @@ fn validate_config(body: CreateTable) -> Result<TableConfig, String> {
     if body.small_blind == 0 || body.big_blind < body.small_blind {
         return Err("Big blind must be at least the small blind, and the small blind must be positive".into());
     }
-    if body.buy_in < body.big_blind * 10 {
+    // Checked: the blinds come straight from the request, so `big_blind * 10`
+    // can overflow. A big blind that large can't fit ten times in any buy-in.
+    let min_buy_in = body.big_blind.checked_mul(10);
+    if min_buy_in.is_none_or(|min| body.buy_in < min) {
         return Err("Buy-in must be at least 10 big blinds".into());
     }
     if body.buy_in > 100_000_000 {
@@ -298,5 +301,29 @@ mod tests {
         assert_eq!(client_ip(peer, &fwd, true), "2001:db8::1".parse::<IpAddr>().unwrap());
         assert_eq!(client_ip(peer, &headers(&["junk"]), true), peer.ip());
         assert_eq!(client_ip(peer, &HeaderMap::new(), true), peer.ip());
+    }
+
+    fn create(small_blind: u64, big_blind: u64, buy_in: u64) -> CreateTable {
+        CreateTable {
+            name: "Test".into(),
+            small_blind,
+            big_blind,
+            buy_in,
+            max_seats: 6,
+            private: false,
+        }
+    }
+
+    #[test]
+    fn validate_config_rejects_a_big_blind_that_overflows_the_buy_in_check() {
+        let err = validate_config(create(1, 1_844_674_407_370_955_162, 1000)).err();
+        assert_eq!(err.as_deref(), Some("Buy-in must be at least 10 big blinds"));
+        assert!(validate_config(create(1, u64::MAX, 1000)).is_err());
+    }
+
+    #[test]
+    fn validate_config_requires_ten_big_blinds() {
+        assert!(validate_config(create(5, 10, 100)).is_ok());
+        assert!(validate_config(create(5, 10, 99)).is_err());
     }
 }
